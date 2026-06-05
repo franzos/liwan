@@ -294,6 +294,8 @@ pub struct User {
     pub username: String,
     pub role: UserRole,
     pub projects: Vec<String>,
+    pub email: Option<String>,
+    pub auth: AuthMethod,
 }
 
 #[cfg(test)]
@@ -334,6 +336,34 @@ impl Display for UserRole {
         match self {
             UserRole::Admin => write!(f, "admin"),
             UserRole::User => write!(f, "user"),
+        }
+    }
+}
+
+#[derive(Debug, JsonSchema, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMethod {
+    #[default]
+    Password,
+    Oidc,
+}
+
+impl Display for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMethod::Password => write!(f, "password"),
+            AuthMethod::Oidc => write!(f, "oidc"),
+        }
+    }
+}
+
+impl TryFrom<String> for AuthMethod {
+    type Error = ();
+    fn try_from(s: String) -> Result<Self, ()> {
+        match s.as_str() {
+            "password" => Ok(AuthMethod::Password),
+            "oidc" => Ok(AuthMethod::Oidc),
+            _ => Err(()),
         }
     }
 }

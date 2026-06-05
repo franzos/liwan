@@ -33,6 +33,20 @@ pub static SESSION_COOKIE: LazyLock<Cookie<'static>> = LazyLock::new(|| {
     session_cookie
 });
 
+pub static OIDC_STATE_COOKIE_NAME: &str = "liwan-oidc-state";
+
+/// Pre-auth cookie holding the `state` handle. SameSite=Lax (not Strict) so it
+/// survives the cross-site top-level redirect back from the IdP. Scoped to the
+/// callback path. 10-minute lifetime matches the auth-code window.
+pub static OIDC_STATE_COOKIE: LazyLock<Cookie<'static>> = LazyLock::new(|| {
+    let mut c = Cookie::new(OIDC_STATE_COOKIE_NAME, "");
+    c.set_max_age(Some(Duration::from_secs(600).try_into().unwrap()));
+    c.set_http_only(true);
+    c.set_path("/api/dashboard/auth/oidc");
+    c.set_same_site(SameSite::Lax);
+    c
+});
+
 pub static LOGOUT_COOKIES: LazyLock<CookieJar> = LazyLock::new(|| {
     let mut session_cookie = SESSION_COOKIE.clone();
     session_cookie.make_removal();

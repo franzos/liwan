@@ -40,3 +40,16 @@ listen=9042 # The port to listen on (http)
 # See https://liwan.dev/guides/duckdb
 # threads=2
 # memory_limit=2G
+
+# OpenID Connect (OIDC) single sign-on (Optional)
+# When issuer, client_id and client_secret are all set, a "Sign in with SSO"
+# button appears on the login page. First-time SSO users are created with no
+# project access until an admin grants it; password login keeps working.
+# The redirect URI to register with your provider is:
+#   <base_url>/api/dashboard/auth/oidc/callback
+# [oidc]
+# issuer="https://accounts.example.com"
+# client_id="liwan"
+# client_secret="..."            # prefer the LIWAN_OIDC_CLIENT_SECRET env var
+# scopes=["openid", "email", "profile"]
+# button_label="Sign in with SSO"

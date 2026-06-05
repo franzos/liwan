@@ -14,12 +14,17 @@ The format is roughly based on the output of `git-cliff` and this project adhere
   - `🛡️ Security`
 
 Since this is not a library, this changelog focuses on the changes that are relevant to the end-users. For a detailed list of changes, see the commit history, which adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). New releases are created automatically when a new tag is pushed (Commit message: chore(release): vX.X.X).
+
+This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync.
 -->
 
-## [v1.6.0] - 2026-06-02
+## [v1.5.0-fork.1] - 2026-06-04
+
+First release of the fork, based on upstream v1.5.0.
 
 ### Features
 
+- Added OpenID Connect (OIDC) single sign-on. Set `[oidc]` (issuer, client_id, client_secret) to show a "Sign in with SSO" button on the login page. First-time SSO users are created with no project access until an admin grants it; password login keeps working alongside it.
 - Added global and per-entity collection settings for visitor grouping, geolocation detail, session metrics, UTM parameters, and data retention
 - Added ingest drop rules to discard matching events before they are stored
 - Added project display settings to show or hide metrics and dimensions per project

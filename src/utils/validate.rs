@@ -28,7 +28,13 @@ mod tests {
         };
         assert!(can_access_project(&project, None), "Public project should be accessible without a user.");
 
-        let user = User { username: "test".to_string(), role: UserRole::User, projects: vec!["other".to_string()] };
+        let user = User {
+            username: "test".to_string(),
+            role: UserRole::User,
+            projects: vec!["other".to_string()],
+            email: None,
+            auth: crate::app::models::AuthMethod::Password,
+        };
         assert!(can_access_project(&project, Some(&user)), "Public project should be accessible with any user.");
 
         let project = Project {
@@ -37,7 +43,13 @@ mod tests {
             secret: None,
             public: false,
         };
-        let admin_user = User { username: "admin".to_string(), role: UserRole::Admin, projects: vec![] };
+        let admin_user = User {
+            username: "admin".to_string(),
+            role: UserRole::Admin,
+            projects: vec![],
+            email: None,
+            auth: crate::app::models::AuthMethod::Password,
+        };
         assert!(can_access_project(&project, Some(&admin_user)), "Admin should have access to any project.");
 
         let project = Project {

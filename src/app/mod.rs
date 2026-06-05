@@ -10,8 +10,8 @@ use crate::{config::Config, utils::writable::check_directory_writable};
 use crate::utils::r2d2_sqlite::SqliteConnectionManager;
 use anyhow::{Context, Result};
 use core::{
-    LiwanEntities, LiwanEvents, LiwanOnboarding, LiwanProjectSettings, LiwanProjects, LiwanSessions, LiwanSettings,
-    LiwanUsers,
+    LiwanEntities, LiwanEvents, LiwanOidc, LiwanOidcState, LiwanOnboarding, LiwanProjectSettings, LiwanProjects,
+    LiwanSessions, LiwanSettings, LiwanUsers,
 };
 use duckdb::DuckdbConnectionManager;
 use models::{DisplayOverride, GeoDetail};
@@ -33,6 +33,8 @@ pub struct Liwan {
     pub projects: LiwanProjects,
     pub settings: LiwanSettings,
     pub project_settings: LiwanProjectSettings,
+    pub oidc: Option<LiwanOidc>,
+    pub oidc_state: LiwanOidcState,
 
     #[cfg(feature = "geoip")]
     pub geoip: Arc<core::LiwanGeoIP>,
@@ -76,6 +78,8 @@ impl Liwan {
             projects: LiwanProjects::new(conn_app.clone()),
             settings: LiwanSettings::try_new(conn_app.clone())?,
             project_settings: LiwanProjectSettings::new(conn_app.clone()),
+            oidc: LiwanOidc::try_new(&config.oidc, &config.base_url)?,
+            oidc_state: LiwanOidcState::new(conn_app.clone()),
             users: LiwanUsers::new(conn_app),
 
             events_pool: conn_events,
@@ -100,6 +104,8 @@ impl Liwan {
             projects: LiwanProjects::new(conn_app.clone()),
             settings: LiwanSettings::try_new(conn_app.clone())?,
             project_settings: LiwanProjectSettings::new(conn_app.clone()),
+            oidc: LiwanOidc::try_new(&config.oidc, &config.base_url)?,
+            oidc_state: LiwanOidcState::new(conn_app.clone()),
             users: LiwanUsers::new(conn_app),
 
             events_pool: conn_events,

@@ -68,10 +68,13 @@ struct UpdateUserRequest {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 struct UserResponse {
     username: String,
     role: UserRole,
     projects: Vec<String>,
+    email: Option<String>,
+    auth: crate::app::models::AuthMethod,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -239,7 +242,13 @@ async fn get_users(
         .all()
         .http_err("Failed to get users", StatusCode::INTERNAL_SERVER_ERROR)?
         .into_iter()
-        .map(|u| UserResponse { username: u.username.clone(), role: u.role, projects: u.projects.clone() })
+        .map(|u| UserResponse {
+            username: u.username.clone(),
+            role: u.role,
+            projects: u.projects.clone(),
+            email: u.email.clone(),
+            auth: u.auth,
+        })
         .collect();
 
     Ok(([(http::header::CACHE_CONTROL, "private")], Json(UsersResponse { users })).into())

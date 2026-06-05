@@ -31,6 +31,9 @@ pub struct Config {
     #[serde(default)]
     pub duckdb: DuckdbConfig,
 
+    #[serde(default)]
+    pub oidc: OidcConfig,
+
     #[serde(default = "default_trusted_headers", deserialize_with = "deserialize_trusted_headers")]
     pub trusted_headers: Vec<TrustedHeader>,
 
@@ -51,6 +54,7 @@ impl Default for Config {
             data_dir: default_data_dir(),
             geoip: Default::default(),
             duckdb: Default::default(),
+            oidc: Default::default(),
             disable_favicons: false,
             listen: None,
             port: None,
@@ -72,6 +76,42 @@ pub struct GeoIpConfig {
     pub maxmind_license_key: Option<String>,
     #[serde(default = "default_maxmind_edition")]
     pub maxmind_edition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    #[serde(default)]
+    pub issuer: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default = "default_oidc_scopes")]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub button_label: Option<String>,
+}
+
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self { issuer: None, client_id: None, client_secret: None, scopes: default_oidc_scopes(), button_label: None }
+    }
+}
+
+fn default_oidc_scopes() -> Vec<String> {
+    vec!["openid".to_string(), "email".to_string(), "profile".to_string()]
+}
+
+impl OidcConfig {
+    /// OIDC is active only when issuer, client_id, and client_secret are all set.
+    pub fn enabled(&self) -> bool {
+        self.issuer.is_some() && self.client_id.is_some() && self.client_secret.is_some()
+    }
+
+    /// Derived from base_url; never configured directly.
+    pub fn redirect_uri(&self, base_url: &str) -> String {
+        format!("{}/api/dashboard/auth/oidc/callback", base_url.trim_end_matches('/'))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -221,7 +261,8 @@ impl Config {
 
 fn map_env_key(key: &str) -> Option<String> {
     let key = key.strip_prefix("LIWAN_")?.to_ascii_lowercase();
-    const NESTED_PREFIXES: &[(&str, &str)] = &[("maxmind_", "geoip.maxmind_"), ("duckdb_", "duckdb.")];
+    const NESTED_PREFIXES: &[(&str, &str)] =
+        &[("maxmind_", "geoip.maxmind_"), ("duckdb_", "duckdb."), ("oidc_", "oidc.")];
 
     for (prefix, mapped_prefix) in NESTED_PREFIXES {
         if let Some(rest) = key.strip_prefix(prefix) {
@@ -358,6 +399,35 @@ mod test {
     fn test_env_custom_trusted_header() {
         let config = Config::load(None, vec![("LIWAN_TRUSTED_HEADERS", "X_CLIENT_IP")]).expect("failed to load config");
         assert_eq!(config.trusted_headers, vec![TrustedHeader::Other("x-client-ip".to_string())]);
+    }
+
+    #[test]
+    fn test_oidc_config() {
+        let (_temp_dir, config_path) = temp_config(
+            "liwan-oidc.config.toml",
+            r#"
+                base_url = "https://example.com"
+                [oidc]
+                issuer = "https://accounts.example.com"
+                client_id = "liwan"
+            "#,
+        );
+        let env = vec![("LIWAN_OIDC_CLIENT_SECRET", "shhh")];
+        let config = Config::load(Some(config_path), env).expect("failed to load config");
+        assert!(config.oidc.enabled());
+        assert_eq!(config.oidc.issuer.as_deref(), Some("https://accounts.example.com"));
+        assert_eq!(config.oidc.client_secret.as_deref(), Some("shhh"));
+        assert_eq!(config.oidc.scopes, vec!["openid", "email", "profile"]);
+        assert_eq!(
+            config.oidc.redirect_uri("https://example.com"),
+            "https://example.com/api/dashboard/auth/oidc/callback"
+        );
+    }
+
+    #[test]
+    fn test_oidc_disabled_by_default() {
+        let config = Config::load(None, Vec::<(String, String)>::new()).expect("failed to load config");
+        assert!(!config.oidc.enabled());
     }
 
     #[test]

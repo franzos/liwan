@@ -79,10 +79,16 @@ struct DimensionTableRow {
 #[serde(rename_all = "camelCase")]
 struct ConfigResponse {
     disable_favicons: bool,
+    oidc_enabled: bool,
+    oidc_button_label: Option<String>,
 }
 
 async fn config_handler(State(app): State<RouterState>) -> ApiResult<Json<ConfigResponse>> {
-    Ok(Json(ConfigResponse { disable_favicons: app.config.disable_favicons }))
+    Ok(Json(ConfigResponse {
+        disable_favicons: app.config.disable_favicons,
+        oidc_enabled: app.config.oidc.enabled(),
+        oidc_button_label: app.config.oidc.button_label.clone(),
+    }))
 }
 
 #[derive(Serialize, JsonSchema)]

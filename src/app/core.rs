@@ -1,5 +1,6 @@
 mod entities;
 mod events;
+mod oidc;
 mod onboarding;
 mod projects;
 pub mod reports;
@@ -9,6 +10,7 @@ mod users;
 
 pub use entities::LiwanEntities;
 pub use events::{LiwanEvents, PruneStats};
+pub use oidc::{LiwanOidc, LiwanOidcState};
 pub use onboarding::LiwanOnboarding;
 pub use projects::LiwanProjects;
 pub use sessions::LiwanSessions;

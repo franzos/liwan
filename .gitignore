@@ -1,4 +1,5 @@
 /target
+/target-podman
 liwan.config.toml
 /liwan-data
 profile.json

@@ -7,9 +7,9 @@
     </h2>
     <div>
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/explodingcamera/liwan/test.yaml?style=flat-square)
-![GitHub Release](https://img.shields.io/github/v/release/explodingcamera/liwan?style=flat-square)
-[![Container](https://img.shields.io/badge/Container-ghcr.io%2Fexplodingcamera%2Fliwan%3Alatest-blue?style=flat-square)](https://github.com/explodingcamera/liwan/pkgs/container/liwan)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/franzos/liwan/test.yaml?style=flat-square)
+![GitHub Release](https://img.shields.io/github/v/release/franzos/liwan?style=flat-square)
+[![Container](https://img.shields.io/badge/Container-ghcr.io%2Ffranzos%2Fliwan%3Alatest-blue?style=flat-square)](https://github.com/franzos/liwan/pkgs/container/liwan)
 
 </div>
 
@@ -34,6 +34,23 @@
   Get accurate data about your website’s visitors, page views, referrers, and more. Liwan detects bots and crawlers and filters them out by default.
 - **Real-time analytics**\
   See your website’s traffic in real-time. Liwan updates the dashboard automatically as new visitors come in.
+
+### More details
+
+- **Login options**\
+  Sign in with a username and password, or connect your identity provider over OIDC/SSO. With OIDC enabled, a "Sign in with SSO" button appears on the login page and accounts are provisioned automatically on first login. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
+- **Multiple sites in one instance**\
+  Track as many websites and apps as you like. Each tracked site is an *entity*, and entities are grouped into *projects* that you view together on the dashboard. Projects can be public (viewable without logging in) or private.
+- **Multiple users**\
+  Liwan is fully multi-user. Admins create accounts from the dashboard or the CLI, set each user's email, and grant access to specific projects.
+- **Roles & permissions**\
+  Two roles keep things simple: *admins* manage users, projects, entities, and global settings; regular *users* get read-only access to the projects they've been granted plus any public ones. Access is always enforced on the server.
+- **What gets tracked**\
+  Page views, unique visitors, bounce rate, and time on site — broken down by page, referrer, UTM campaign, browser, OS, device type, screen size, and country or city (optional GeoIP). Capture custom events too, via the one-line tracking script, the `liwan-tracker` npm package, or a plain HTTP endpoint. Bots are filtered out by default, and configurable drop rules and retention policies let you decide exactly what's stored.
+
+## Fork
+
+This is a fork of [explodingcamera/liwan](https://github.com/explodingcamera/liwan), adding support for an OIDC/OAuth login flow.
 
 ## License
 

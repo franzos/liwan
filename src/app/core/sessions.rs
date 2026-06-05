@@ -32,7 +32,7 @@ impl LiwanSessions {
 
         let mut stmt = conn.prepare_cached(
             r#"--sql
-            select u.username, u.role, u.projects
+            select u.username, u.role, u.projects, u.email, u.auth
             from sessions s
             join users u
             on lower(u.username) = lower(s.username)
@@ -52,6 +52,8 @@ impl LiwanSessions {
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
                     .collect(),
+                email: row.get("email")?,
+                auth: row.get::<_, String>("auth")?.try_into().unwrap_or_default(),
             })
         });
 
