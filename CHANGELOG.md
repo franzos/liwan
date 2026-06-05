@@ -18,6 +18,12 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync.
 -->
 
+## [v1.5.0-fork.2] - 2026-06-05
+
+### Features
+
+- OIDC usernames are transliterated to ASCII with a name fallback
+
 ## [v1.5.0-fork.1] - 2026-06-04
 
 First release of the fork, based on upstream v1.5.0.
