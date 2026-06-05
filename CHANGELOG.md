@@ -15,7 +15,7 @@ The format is roughly based on the output of `git-cliff` and this project adhere
 
 Since this is not a library, this changelog focuses on the changes that are relevant to the end-users. For a detailed list of changes, see the commit history, which adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). New releases are created automatically when a new tag is pushed (Commit message: chore(release): vX.X.X).
 
-This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync.
+This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync. The base is upstream `main`, which at the time of forking sat several commits past the upstream `v1.5.0` tag — only the entries below are this fork's own changes; everything else comes from upstream.
 -->
 
 ## [v1.5.0-fork.2] - 2026-06-05
@@ -26,30 +26,28 @@ This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-
 
 ## [v1.5.0-fork.1] - 2026-06-04
 
-First release of the fork, based on upstream v1.5.0.
+First release of the fork, based on upstream `main` (a few commits past the upstream `v1.5.0` tag).
 
 ### Features
 
 - Added OpenID Connect (OIDC) single sign-on. Set `[oidc]` (issuer, client_id, client_secret) to show a "Sign in with SSO" button on the login page. First-time SSO users are created with no project access until an admin grants it; password login keeps working alongside it.
-- Added global and per-entity collection settings for visitor grouping, geolocation detail, session metrics, UTM parameters, and data retention
-- Added ingest drop rules to discard matching events before they are stored
-- Added project display settings to show or hide metrics and dimensions per project
-- Added a pruning tool to apply retention and collection settings to historical data
 
-### Bug Fixes
+### CI
 
-- Fixed bounce rate deltas so lower bounce rates are shown as an improvement
+- Build the container image from the fork's own workflow and releases
+
+### Inherited from upstream (not yet in an upstream release)
+
+These come from upstream `main` past the `v1.5.0` tag and ship in this fork's builds. They are upstream's work, listed here only so it's clear what the fork binary contains:
+
+- Global and per-entity collection settings for visitor grouping, geolocation detail, session metrics, UTM parameters, and data retention
+- Ingest drop rules to discard matching events before they are stored
+- Project display settings to show or hide metrics and dimensions per project
+- A pruning tool to apply retention and collection settings to historical data
+- Renamed the internal `visitor_id` event column to `visitor_group_id`; existing installs migrate automatically with defaults that preserve previous behavior
+- Fixed bounce rate deltas so lower bounce rates show as an improvement
 - Fixed the account settings form to avoid React form action runtime errors
-
-### Documentation
-
-- Added documentation for collected data, privacy-focused collection settings, cookie banner considerations, and projects/entities
-- Updated the docs site for clearer setup, configuration, metrics, GeoIP, reverse proxy, DuckDB, and ad blocker guidance
-
-### Other
-
-- Renamed the internal `visitor_id` event column to `visitor_group_id` to better describe how repeat visits are grouped
-- Existing installs are migrated automatically with collection settings that preserve the previous default behavior
+- Documentation for collected data, collection settings, cookie banners, and projects/entities, plus general docs-site updates
 
 ## [v1.5.0] - 2026-06-15
 
