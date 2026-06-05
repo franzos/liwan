@@ -38,7 +38,7 @@
 ### More details
 
 - **Login options**\
-  Sign in with a username and password, or connect your identity provider over OIDC/SSO. With OIDC enabled, a "Sign in with SSO" button appears on the login page and accounts are provisioned automatically on first login. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
+  Sign in with a username and password, or connect your identity provider over OIDC/SSO. With OIDC enabled, a "Sign in with SSO" button appears on the login page and accounts are provisioned automatically on first login. The username is taken from the provider's `preferred_username`, then a verified email, and — when neither is available — the user's name (e.g. `Jane Doe` → `jane-doe`), falling back to the opaque subject ID only as a last resort; either way, the account is matched on the provider's subject, so email or name changes never break the link. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
 - **Multiple sites in one instance**\
   Track as many websites and apps as you like. Each tracked site is an *entity*, and entities are grouped into *projects* that you view together on the dashboard. Projects can be public (viewable without logging in) or private.
 - **Multiple users**\

@@ -68,7 +68,7 @@ impl LiwanUsers {
         subject: &str,
         email: Option<&str>,
         preferred_username: Option<&str>,
-        _name: Option<&str>,
+        name: Option<&str>,
     ) -> Result<models::User> {
         if self.get_by_oidc(issuer, subject)?.is_some() {
             let conn = self.pool.get()?;
@@ -81,7 +81,7 @@ impl LiwanUsers {
             return self.get_by_oidc(issuer, subject)?.context("user vanished after update");
         }
 
-        let base = derive_username_base(preferred_username, email, subject);
+        let base = derive_username_base(preferred_username, email, name, subject);
         let username = self.unique_username(&base)?;
         let conn = self.pool.get()?;
         conn.execute(
@@ -177,37 +177,58 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<models::User> {
     })
 }
 
+/// Transliterate to ASCII, lowercase, drop quotes, and reduce every run of
+/// disallowed chars to a single `-`. Underscores are preserved; `-` separates.
+/// May return an empty or short string — the caller decides what to do.
+fn slugify(raw: &str) -> String {
+    let ascii = deunicode::deunicode(raw).to_lowercase();
+    let mut out = String::with_capacity(ascii.len());
+    let mut pending_dash = false;
+    for c in ascii.chars() {
+        match c {
+            '\'' | '"' | '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' => {}
+            'a'..='z' | '0'..='9' | '_' => {
+                if pending_dash && !out.is_empty() {
+                    out.push('-');
+                }
+                pending_dash = false;
+                out.push(c);
+            }
+            _ => pending_dash = true,
+        }
+    }
+    out
+}
+
 /// Build a candidate Liwan username from OIDC claims, preferring
-/// preferred_username, then the email local-part, then the subject. The result
-/// is lowercased, stripped to [a-z0-9_-], clamped to 3..=64 chars, and padded if
-/// too short. Always returns a string that passes `is_valid_username`.
-pub(crate) fn derive_username_base(preferred_username: Option<&str>, email: Option<&str>, subject: &str) -> String {
-    let raw = preferred_username
-        .map(str::to_string)
-        .or_else(|| email.and_then(|e| e.split('@').next().map(str::to_string)))
-        .unwrap_or_default();
+/// preferred_username, then the verified email local-part, then the name, then
+/// the subject. The result is an ASCII slug clamped to 3..=64 chars. Always
+/// returns a string that passes `is_valid_username`.
+pub(crate) fn derive_username_base(
+    preferred_username: Option<&str>,
+    email: Option<&str>,
+    name: Option<&str>,
+    subject: &str,
+) -> String {
+    let candidates = [preferred_username, email.and_then(|e| e.split('@').next()), name];
 
-    let clean = |s: &str| -> String {
-        s.to_lowercase()
-            .chars()
-            .map(|c| if c == '.' || c == ' ' { '-' } else { c })
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-            .collect()
-    };
+    let mut base = candidates.into_iter().flatten().map(slugify).find(|s| s.len() >= 3).unwrap_or_default();
 
-    let mut cleaned = clean(&raw);
-    if cleaned.len() < 3 {
-        let sub_slug = clean(subject);
-        cleaned = if sub_slug.len() >= 3 { sub_slug } else { format!("user-{sub_slug}") };
+    if base.len() < 3 {
+        let sub_slug = slugify(subject);
+        base = if sub_slug.len() >= 3 { sub_slug } else { format!("user-{sub_slug}") };
     }
 
-    if cleaned.len() > 64 {
-        cleaned.truncate(64);
+    if base.len() > 64 {
+        base.truncate(64);
+        while base.ends_with('-') {
+            base.pop();
+        }
     }
-    while cleaned.len() < 3 {
-        cleaned.push('0');
+    while base.len() < 3 {
+        base.push('0');
     }
-    cleaned
+    base
 }
 
 #[cfg(test)]
@@ -218,16 +239,59 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn derive_username_prefers_preferred_then_email_then_sub() {
-        assert_eq!(derive_username_base(Some("Alice.B"), Some("x@y.com"), "sub1"), "alice-b");
-        assert_eq!(derive_username_base(None, Some("Bob+tag@y.com"), "sub2"), "bobtag");
-        assert_eq!(derive_username_base(None, None, "abc-123"), "abc-123");
+    fn slugify_transforms() {
+        assert_eq!(slugify("José Müller"), "jose-muller");
+        assert_eq!(slugify("李雷"), "li-lei");
+        assert_eq!(slugify("Москва"), "moskva");
+        assert_eq!(slugify("O'Brien"), "obrien");
+        assert_eq!(slugify("Mike  Simon"), "mike-simon");
+        assert_eq!(slugify("  Mike  "), "mike");
+        assert_eq!(slugify("Mike Anderson Simon"), "mike-anderson-simon");
+        assert_eq!(slugify("bob_smith"), "bob_smith");
+        assert_eq!(slugify("Bob+tag"), "bob-tag");
+        assert_eq!(slugify("Alice.B"), "alice-b");
+    }
+
+    #[test]
+    fn derive_username_order_precedence() {
+        // preferred beats email beats name beats subject
+        assert_eq!(derive_username_base(Some("Alice.B"), Some("x@y.com"), Some("Name"), "sub1"), "alice-b");
+        assert_eq!(derive_username_base(None, Some("bob@y.com"), Some("Name"), "sub1"), "bob");
+        assert_eq!(derive_username_base(None, Some("a@y.com"), Some("Name"), "sub1"), "name");
+        assert_eq!(derive_username_base(None, None, None, "abc-123"), "abc-123");
+    }
+
+    #[test]
+    fn derive_username_uses_name() {
+        assert_eq!(derive_username_base(None, None, Some("Liwan Tester"), "550e8400-uuid"), "liwan-tester");
+        assert_eq!(derive_username_base(None, None, Some("Mike Anderson Simon"), "s"), "mike-anderson-simon");
+        assert_eq!(derive_username_base(None, None, Some("José Müller"), "s"), "jose-muller");
+        assert_eq!(derive_username_base(None, None, Some("李雷"), "s"), "li-lei");
+        assert_eq!(derive_username_base(None, None, Some("Москва"), "s"), "moskva");
+        assert_eq!(derive_username_base(None, None, Some("O'Brien"), "s"), "obrien");
+    }
+
+    #[test]
+    fn derive_username_email_local_part() {
+        assert_eq!(derive_username_base(None, Some("Bob+tag@y.com"), None, "s"), "bob-tag");
+    }
+
+    #[test]
+    fn derive_username_preserves_underscore() {
+        assert_eq!(derive_username_base(Some("bob_smith"), None, None, "s"), "bob_smith");
+    }
+
+    #[test]
+    fn derive_username_short_candidate_falls_through() {
+        assert_eq!(derive_username_base(Some("ab"), None, None, "abc-123"), "abc-123");
     }
 
     #[test]
     fn derive_username_pads_short_and_falls_back() {
-        assert!(derive_username_base(Some("a"), None, "sub").len() >= 3);
-        let u = derive_username_base(Some("@@@"), None, "f8c9-d0e1");
+        assert!(derive_username_base(Some("a"), None, None, "sub").len() >= 3);
+        let u = derive_username_base(Some("@@@"), None, None, "f8c9-d0e1");
+        assert!(validate::is_valid_username(&u), "got: {u}");
+        let u = derive_username_base(None, None, None, "x");
         assert!(validate::is_valid_username(&u), "got: {u}");
     }
 
@@ -262,6 +326,16 @@ mod tests {
         let u = app.users.provision_oidc("https://idp", "sub-x", None, Some("alice"), None).unwrap();
         assert_ne!(u.username, "alice");
         assert!(u.username.starts_with("alice"));
+    }
+
+    #[test]
+    fn provision_suffixes_name_collisions() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let iss = "https://idp.example.com";
+        let u1 = app.users.provision_oidc(iss, "sub-a", None, None, Some("Liwan Tester")).unwrap();
+        let u2 = app.users.provision_oidc(iss, "sub-b", None, None, Some("Liwan Tester")).unwrap();
+        assert_eq!(u1.username, "liwan-tester");
+        assert_eq!(u2.username, "liwan-tester-2");
     }
 
     #[test]
