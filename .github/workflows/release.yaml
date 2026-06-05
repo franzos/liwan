@@ -86,6 +86,6 @@ jobs:
       packages: write
       contents: read
     needs: [create-release, upload-assets]
-    uses: explodingcamera/liwan/.github/workflows/container.yaml@main
+    uses: ./.github/workflows/container.yaml
     with:
       tag: ${{ github.ref_name }}
