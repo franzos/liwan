@@ -90,12 +90,61 @@ pub struct OidcConfig {
     pub scopes: Vec<String>,
     #[serde(default)]
     pub button_label: Option<String>,
+    #[serde(default)]
+    pub registration: OidcRegistration,
+    #[serde(default, deserialize_with = "deserialize_allowed_domains")]
+    pub allowed_domains: Vec<String>,
 }
 
 impl Default for OidcConfig {
     fn default() -> Self {
-        Self { issuer: None, client_id: None, client_secret: None, scopes: default_oidc_scopes(), button_label: None }
+        Self {
+            issuer: None,
+            client_id: None,
+            client_secret: None,
+            scopes: default_oidc_scopes(),
+            button_label: None,
+            registration: OidcRegistration::default(),
+            allowed_domains: Vec::new(),
+        }
     }
+}
+
+/// Who may have a local account auto-provisioned on first OIDC login.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OidcRegistration {
+    /// Any user the IdP authenticates gets an account (today's behavior).
+    #[default]
+    Open,
+    /// No new accounts; only users who already exist can log in.
+    Closed,
+    /// New accounts only for verified emails in `allowed_domains`.
+    DomainAllowlist,
+}
+
+/// Accepts a TOML array or a comma-separated env string (mirrors
+/// `deserialize_trusted_headers`); required because `parse_env_value` only emits
+/// scalars, so a plain `Vec<String>` can't be set via `LIWAN_OIDC_ALLOWED_DOMAINS`.
+/// Normalizes each entry: trim, strip a trailing `.`, lowercase, drop empties.
+pub fn deserialize_allowed_domains<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DomainsInput {
+        Single(String),
+        Multiple(Vec<String>),
+    }
+
+    let values = match DomainsInput::deserialize(deserializer)? {
+        DomainsInput::Single(value) => value.split(',').map(str::to_owned).collect::<Vec<_>>(),
+        DomainsInput::Multiple(values) => values,
+    };
+
+    Ok(values
+        .into_iter()
+        .map(|v| v.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .collect())
 }
 
 fn default_oidc_scopes() -> Vec<String> {
@@ -245,6 +294,20 @@ impl Config {
         }
         if config.visitor_group_rotation_hour > 23 {
             bail!("Invalid visitor_group_rotation_hour: must be between 0 and 23");
+        }
+        if config.oidc.registration == OidcRegistration::DomainAllowlist {
+            if config.oidc.allowed_domains.is_empty() {
+                bail!("oidc.registration = \"domain_allowlist\" requires a non-empty oidc.allowed_domains");
+            }
+            if !config.oidc.scopes.iter().any(|s| s == "email") {
+                bail!(
+                    "oidc.registration = \"domain_allowlist\" requires the \"email\" scope in oidc.scopes to read the verified email"
+                );
+            }
+        } else if !config.oidc.allowed_domains.is_empty() {
+            tracing::warn!(
+                "oidc.allowed_domains is set but oidc.registration is not \"domain_allowlist\"; the list is ignored"
+            );
         }
 
         Ok(config)
@@ -428,6 +491,97 @@ mod test {
     fn test_oidc_disabled_by_default() {
         let config = Config::load(None, Vec::<(String, String)>::new()).expect("failed to load config");
         assert!(!config.oidc.enabled());
+        assert_eq!(config.oidc.registration, OidcRegistration::Open);
+        assert!(config.oidc.allowed_domains.is_empty());
+    }
+
+    #[test]
+    fn test_oidc_allowed_domains_toml_normalized() {
+        let (_temp_dir, config_path) = temp_config(
+            "liwan-allowlist.config.toml",
+            r#"
+                base_url = "https://example.com"
+                [oidc]
+                issuer = "https://accounts.example.com"
+                client_id = "liwan"
+                client_secret = "shhh"
+                registration = "domain_allowlist"
+                allowed_domains = [" Example.COM", "acme.org.", ""]
+            "#,
+        );
+        let config = Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
+        assert_eq!(config.oidc.registration, OidcRegistration::DomainAllowlist);
+        assert_eq!(config.oidc.allowed_domains, vec!["example.com".to_string(), "acme.org".to_string()]);
+    }
+
+    #[test]
+    fn test_oidc_allowed_domains_env_comma_separated() {
+        let (_temp_dir, config_path) = temp_config(
+            "liwan-allowlist-env.config.toml",
+            r#"
+                base_url = "https://example.com"
+                [oidc]
+                issuer = "https://accounts.example.com"
+                client_id = "liwan"
+                client_secret = "shhh"
+                registration = "domain_allowlist"
+            "#,
+        );
+        let env = vec![("LIWAN_OIDC_ALLOWED_DOMAINS", "example.com,acme.org")];
+        let config = Config::load(Some(config_path), env).expect("failed to load config");
+        assert_eq!(config.oidc.allowed_domains, vec!["example.com".to_string(), "acme.org".to_string()]);
+    }
+
+    #[test]
+    fn test_oidc_allowlist_empty_domains_errors() {
+        let (_temp_dir, config_path) = temp_config(
+            "liwan-allowlist-empty.config.toml",
+            r#"
+                base_url = "https://example.com"
+                [oidc]
+                issuer = "https://accounts.example.com"
+                client_id = "liwan"
+                client_secret = "shhh"
+                registration = "domain_allowlist"
+            "#,
+        );
+        assert!(Config::load(Some(config_path), Vec::<(String, String)>::new()).is_err());
+    }
+
+    #[test]
+    fn test_oidc_allowlist_without_email_scope_errors() {
+        let (_temp_dir, config_path) = temp_config(
+            "liwan-allowlist-noscope.config.toml",
+            r#"
+                base_url = "https://example.com"
+                [oidc]
+                issuer = "https://accounts.example.com"
+                client_id = "liwan"
+                client_secret = "shhh"
+                registration = "domain_allowlist"
+                allowed_domains = ["example.com"]
+                scopes = ["openid", "profile"]
+            "#,
+        );
+        assert!(Config::load(Some(config_path), Vec::<(String, String)>::new()).is_err());
+    }
+
+    #[test]
+    fn test_oidc_allowed_domains_ignored_when_open() {
+        let (_temp_dir, config_path) = temp_config(
+            "liwan-allowlist-open.config.toml",
+            r#"
+                base_url = "https://example.com"
+                [oidc]
+                issuer = "https://accounts.example.com"
+                client_id = "liwan"
+                client_secret = "shhh"
+                allowed_domains = ["example.com"]
+            "#,
+        );
+        let config = Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
+        assert_eq!(config.oidc.registration, OidcRegistration::Open);
+        assert_eq!(config.oidc.allowed_domains, vec!["example.com".to_string()]);
     }
 
     #[test]

@@ -35,20 +35,13 @@
 - **Real-time analytics**\
   See your website’s traffic in real-time. Liwan updates the dashboard automatically as new visitors come in.
 
-### More details
+### OIDC/SSO
 
-- **Login options**\
-  Sign in with a username and password, or connect your identity provider over OIDC/SSO. With OIDC enabled, a "Sign in with SSO" button appears on the login page and accounts are provisioned automatically on first login. The username is taken from the provider's `preferred_username`, then a verified email, and — when neither is available — the user's name (e.g. `Jane Doe` → `jane-doe`), falling back to the opaque subject ID only as a last resort; either way, the account is matched on the provider's subject, so email or name changes never break the link. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
-- **Multiple sites in one instance**\
-  Track as many websites and apps as you like. Each tracked site is an *entity*, and entities are grouped into *projects* that you view together on the dashboard. Projects can be public (viewable without logging in) or private.
-- **Multiple users**\
-  Liwan is fully multi-user. Admins create accounts from the dashboard or the CLI, set each user's email, and grant access to specific projects.
-- **Roles & permissions**\
-  Two roles keep things simple: *admins* manage users, projects, entities, and global settings; regular *users* get read-only access to the projects they've been granted plus any public ones. Access is always enforced on the server.
-- **What gets tracked**\
-  Page views, unique visitors, bounce rate, and time on site — broken down by page, referrer, UTM campaign, browser, OS, device type, screen size, and country or city (optional GeoIP). Capture custom events too, via the one-line tracking script, the `liwan-tracker` npm package, or a plain HTTP endpoint. Bots are filtered out by default, and configurable drop rules and retention policies let you decide exactly what's stored.
+This fork focuses on OIDC/SSO login. For everything else - sites, users, roles, tracking, and the rest - see the docs at [liwan.dev/getting-started](https://liwan.dev/getting-started/).
 
-## Configuration
+Sign in with a username and password, or connect your identity provider over OIDC/SSO. With OIDC enabled, a "Sign in with SSO" button appears on the login page and accounts are provisioned automatically on first login. The username is taken from the provider's `preferred_username`, then a verified email, and — when neither is available — the user's name (e.g. `Jane Doe` → `jane-doe`), falling back to the opaque subject ID only as a last resort; either way, the account is matched on the provider's subject, so email or name changes never break the link. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
+
+#### Configuration
 
 Liwan reads a single TOML file. It looks for `./liwan.config.toml`, then `$XDG_CONFIG_HOME/liwan/config.toml` (i.e. `~/.config/liwan/config.toml`), or you can point it at an explicit path with `--config <path>` or the `LIWAN_CONFIG` env var. Any value can also be overridden with a `LIWAN_*` environment variable (e.g. `LIWAN_OIDC_CLIENT_SECRET`), which is the recommended way to pass secrets. A fully annotated example lives in [`data/config.example.toml`](data/config.example.toml).
 
@@ -58,7 +51,7 @@ listen   = 9042                             # local http port to bind, typically
 # data_dir = "./liwan-data"                 # defaults to ~/.local/share/liwan/data
 ```
 
-### OpenID Connect (OIDC)
+#### OpenID Connect (OIDC)
 
 Add an `[oidc]` section to enable SSO. It only activates once `issuer`, `client_id`, and `client_secret` are all set — at which point a "Sign in with SSO" button appears on the login page. Password login keeps working alongside it.
 
@@ -77,7 +70,25 @@ Register this redirect URI with your provider (derived from `base_url`):
 <base_url>/api/dashboard/auth/oidc/callback
 ```
 
-First-time SSO users are created as regular users with no project access until an admin grants it; usernames are derived from the OIDC claims as described under [Login options](#more-details). Accounts are matched on the provider's subject, so a later email or name change never breaks the link.
+First-time SSO users are created as regular users with no project access until an admin grants it; usernames are derived from the OIDC claims as described above. Accounts are matched on the provider's subject, so a later email or name change never breaks the link.
+
+#### Restricting who can register
+
+By default any user your IdP authenticates gets a local account on first login. Two options narrow that — they gate **first-time provisioning only**, so returning users (matched on the provider's subject) always log in regardless:
+
+```toml
+[oidc]
+# ... issuer, client_id, client_secret as above ...
+
+# open (default) | closed | domain_allowlist
+registration    = "domain_allowlist"
+allowed_domains = ["example.com", "acme.org"]    # required for domain_allowlist
+```
+
+- **`closed`** — no new accounts; only users who already exist can log in. Handy once everyone intended is enrolled.
+- **`domain_allowlist`** — new accounts only for users whose **verified** email is in `allowed_domains`. An unverified email never qualifies, so the `email` scope is required. Matching is exact and case-insensitive — subdomains do not match (`example.com` excludes `sub.example.com`). The trust here assumes your single configured `issuer` is authoritative for those domains. Configure non-ASCII (IDN) domains in punycode.
+
+Rejections send the user back to the login page with a short explanation. Both fields also accept env overrides (`LIWAN_OIDC_REGISTRATION`, `LIWAN_OIDC_ALLOWED_DOMAINS` as a comma-separated list).
 
 ## Fork
 

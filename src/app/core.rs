@@ -10,7 +10,7 @@ mod users;
 
 pub use entities::LiwanEntities;
 pub use events::{LiwanEvents, PruneStats};
-pub use oidc::{LiwanOidc, LiwanOidcState};
+pub use oidc::{LiwanOidc, LiwanOidcState, RegistrationDecision, RejectReason, email_domain, evaluate_registration};
 pub use onboarding::LiwanOnboarding;
 pub use projects::LiwanProjects;
 pub use sessions::LiwanSessions;

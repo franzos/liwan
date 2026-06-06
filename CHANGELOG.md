@@ -18,6 +18,12 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync. The base is upstream `main`, which at the time of forking sat several commits past the upstream `v1.5.0` tag — only the entries below are this fork's own changes; everything else comes from upstream.
 -->
 
+## [Unreleased]
+
+### Features
+
+- Restrict OIDC sign-up: close registration or limit new accounts to an email-domain allowlist
+
 ## [v1.5.0-fork.2] - 2026-06-05
 
 ### Features

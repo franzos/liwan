@@ -51,10 +51,17 @@ import Layout from "../layouts/Base.astro";
     const form = document.getElementById("login-form") as HTMLFormElement;
     const alert = form?.querySelector("#login-form article") as HTMLElement;
 
-    // Surface any ?error= returned by the OIDC callback.
+    // Surface any ?error= returned by the OIDC callback. The raw code is never
+    // rendered — only mapped messages, assigned via textContent.
     const errorCode = new URLSearchParams(window.location.search).get("error");
     if (errorCode && alert) {
-      alert.textContent = "Sign-in failed. Please try again or use your password.";
+      const messages: Record<string, string> = {
+        registration_closed: "New account registration is currently closed.",
+        domain_not_allowed: "Accounts can only be created with an approved email domain.",
+        email_not_verified: "Your account couldn't be created — a verified email address is required.",
+      };
+      alert.textContent =
+        messages[errorCode] ?? "Sign-in failed. Please try again or use your password.";
       alert.setAttribute("aria-hidden", "false");
     }
 

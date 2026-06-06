@@ -18,7 +18,10 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 
 use crate::{
     PASSWORD_MIN_LENGTH,
-    app::models::UserRole,
+    app::{
+        RegistrationDecision, RejectReason, email_domain, evaluate_registration,
+        models::{User, UserRole},
+    },
     utils::hash::session_token,
     web::{
         MaybeSessionId, RouterState,
@@ -225,18 +228,41 @@ async fn oidc_callback(
     };
 
     let app2 = app.app.clone();
-    let user = match spawn_blocking(move || {
-        app2.users.provision_oidc(
+    let registration = app.config.oidc.registration;
+    let allowed_domains = app.config.oidc.allowed_domains.clone();
+    // The registration gate applies only to first-time provisioning. Returning
+    // users (matched on issuer+subject) always log in, regardless of policy.
+    // Two racing first-logins for the same new subject can both pass the check;
+    // the partial unique index `users_oidc_identity` is the real exactly-once
+    // boundary — the loser's insert hits the constraint and maps to
+    // `provisioning_failed`. Acceptable; the user retries.
+    let provisioned = spawn_blocking(move || -> anyhow::Result<Result<User, RejectReason>> {
+        if app2.users.get_by_oidc(&claims.issuer, &claims.subject)?.is_none()
+            && let RegistrationDecision::Reject(reason) =
+                evaluate_registration(registration, &allowed_domains, claims.email.as_deref())
+        {
+            tracing::warn!(
+                issuer = %claims.issuer,
+                subject = %claims.subject,
+                domain = claims.email.as_deref().and_then(email_domain).as_deref().unwrap_or("<none>"),
+                mode = ?registration,
+                "OIDC registration denied",
+            );
+            return Ok(Err(reason));
+        }
+        Ok(Ok(app2.users.provision_oidc(
             &claims.issuer,
             &claims.subject,
             claims.email.as_deref(),
             claims.preferred_username.as_deref(),
             claims.name.as_deref(),
-        )
+        )?))
     })
-    .await
-    {
-        Ok(Ok(u)) => u,
+    .await;
+
+    let user = match provisioned {
+        Ok(Ok(Ok(u))) => u,
+        Ok(Ok(Err(reason))) => return Ok(fail(cookies, reason.code())),
         Ok(Err(err)) => {
             tracing::warn!(?err, "OIDC user provisioning failed");
             return Ok(fail(cookies, "provisioning_failed"));

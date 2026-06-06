@@ -7,7 +7,7 @@ use openidconnect::{
 };
 
 use crate::app::SqlitePool;
-use crate::config::OidcConfig;
+use crate::config::{OidcConfig, OidcRegistration};
 
 /// The fully-configured client type after discovery (auth + token endpoints set).
 type DiscoveredClient =
@@ -132,6 +132,62 @@ impl LiwanOidc {
     }
 }
 
+/// Outcome of the first-login registration policy. Only consulted when no local
+/// account is matched on `issuer + subject`; returning users always log in.
+pub enum RegistrationDecision {
+    Allow,
+    Reject(RejectReason),
+}
+
+pub enum RejectReason {
+    RegistrationClosed,
+    EmailNotVerified,
+    DomainNotAllowed,
+}
+
+impl RejectReason {
+    /// Redirect code consumed by the login page's code→message map.
+    pub fn code(&self) -> &'static str {
+        match self {
+            RejectReason::RegistrationClosed => "registration_closed",
+            RejectReason::EmailNotVerified => "email_not_verified",
+            RejectReason::DomainNotAllowed => "domain_not_allowed",
+        }
+    }
+}
+
+/// Decide whether a first-time OIDC user may be provisioned. Pure and DB-free.
+/// `email` is `Some` only when the IdP marked it verified (see `finish_login`).
+pub fn evaluate_registration(
+    registration: OidcRegistration,
+    allowed_domains: &[String],
+    email: Option<&str>,
+) -> RegistrationDecision {
+    match registration {
+        OidcRegistration::Open => RegistrationDecision::Allow,
+        OidcRegistration::Closed => RegistrationDecision::Reject(RejectReason::RegistrationClosed),
+        OidcRegistration::DomainAllowlist => match email.and_then(email_domain) {
+            None if email.is_none() => RegistrationDecision::Reject(RejectReason::EmailNotVerified),
+            Some(domain) if allowed_domains.iter().any(|d| d == &domain) => RegistrationDecision::Allow,
+            _ => RegistrationDecision::Reject(RejectReason::DomainNotAllowed),
+        },
+    }
+}
+
+/// Extract the lowercased domain from an email address. Requires exactly one
+/// `@` and a `.` in the domain part; anything else returns `None`. Matching is
+/// exact and case-insensitive — subdomains do not match a parent domain, and
+/// IDN domains are lowercased only (configure them in punycode).
+pub fn email_domain(email: &str) -> Option<String> {
+    let mut parts = email.split('@');
+    let _local = parts.next()?;
+    let domain = parts.next()?;
+    if parts.next().is_some() || domain.is_empty() || !domain.contains('.') {
+        return None;
+    }
+    Some(domain.to_ascii_lowercase())
+}
+
 /// Short-lived authorization-code flow state (state / nonce / PKCE verifier).
 #[derive(Clone)]
 pub struct LiwanOidcState {
@@ -184,5 +240,57 @@ impl LiwanOidcState {
     pub fn peek_nonce(&self, state: &str) -> Option<String> {
         let conn = self.pool.get().ok()?;
         conn.query_row("select nonce from oidc_auth_state where state = ?", [state], |row| row.get::<_, String>(0)).ok()
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    fn domains() -> Vec<String> {
+        vec!["example.com".to_string(), "acme.org".to_string()]
+    }
+
+    fn decide(reg: OidcRegistration, email: Option<&str>) -> Option<&'static str> {
+        match evaluate_registration(reg, &domains(), email) {
+            RegistrationDecision::Allow => None,
+            RegistrationDecision::Reject(r) => Some(r.code()),
+        }
+    }
+
+    #[test]
+    fn email_domain_extracts_and_lowercases() {
+        assert_eq!(email_domain("alice@example.com").as_deref(), Some("example.com"));
+        assert_eq!(email_domain("ALICE@Example.COM").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn email_domain_rejects_malformed() {
+        assert_eq!(email_domain("a@b.com@evil.com"), None);
+        assert_eq!(email_domain("noat"), None);
+        assert_eq!(email_domain("a@localhost"), None);
+        assert_eq!(email_domain("a@"), None);
+    }
+
+    #[test]
+    fn open_always_allows() {
+        assert_eq!(decide(OidcRegistration::Open, Some("x@nope.net")), None);
+        assert_eq!(decide(OidcRegistration::Open, None), None);
+    }
+
+    #[test]
+    fn closed_always_rejects() {
+        assert_eq!(decide(OidcRegistration::Closed, Some("alice@example.com")), Some("registration_closed"));
+        assert_eq!(decide(OidcRegistration::Closed, None), Some("registration_closed"));
+    }
+
+    #[test]
+    fn allowlist_matrix() {
+        assert_eq!(decide(OidcRegistration::DomainAllowlist, Some("alice@example.com")), None);
+        assert_eq!(decide(OidcRegistration::DomainAllowlist, Some("bob@acme.org")), None);
+        assert_eq!(decide(OidcRegistration::DomainAllowlist, Some("ALICE@EXAMPLE.COM")), None);
+        assert_eq!(decide(OidcRegistration::DomainAllowlist, Some("x@nope.net")), Some("domain_not_allowed"));
+        assert_eq!(decide(OidcRegistration::DomainAllowlist, Some("x@sub.example.com")), Some("domain_not_allowed"));
+        assert_eq!(decide(OidcRegistration::DomainAllowlist, None), Some("email_not_verified"));
     }
 }
