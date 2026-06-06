@@ -48,6 +48,37 @@
 - **What gets tracked**\
   Page views, unique visitors, bounce rate, and time on site — broken down by page, referrer, UTM campaign, browser, OS, device type, screen size, and country or city (optional GeoIP). Capture custom events too, via the one-line tracking script, the `liwan-tracker` npm package, or a plain HTTP endpoint. Bots are filtered out by default, and configurable drop rules and retention policies let you decide exactly what's stored.
 
+## Configuration
+
+Liwan reads a single TOML file. It looks for `./liwan.config.toml`, then `$XDG_CONFIG_HOME/liwan/config.toml` (i.e. `~/.config/liwan/config.toml`), or you can point it at an explicit path with `--config <path>` or the `LIWAN_CONFIG` env var. Any value can also be overridden with a `LIWAN_*` environment variable (e.g. `LIWAN_OIDC_CLIENT_SECRET`), which is the recommended way to pass secrets. A fully annotated example lives in [`data/config.example.toml`](data/config.example.toml).
+
+```toml
+base_url = "https://analytics.example.com"  # external URL of this instance (used to build the OIDC redirect URI)
+listen   = 9042                             # local http port to bind, typically behind a reverse proxy
+# data_dir = "./liwan-data"                 # defaults to ~/.local/share/liwan/data
+```
+
+### OpenID Connect (OIDC)
+
+Add an `[oidc]` section to enable SSO. It only activates once `issuer`, `client_id`, and `client_secret` are all set — at which point a "Sign in with SSO" button appears on the login page. Password login keeps working alongside it.
+
+```toml
+[oidc]
+issuer        = "https://idp.example.com"        # discovery base; /.well-known/openid-configuration is appended
+client_id     = "liwan"
+client_secret = "..."                            # prefer the LIWAN_OIDC_CLIENT_SECRET env var
+scopes        = ["openid", "email", "profile"]   # optional; this is the default
+button_label  = "Sign in with SSO"               # optional; label on the login button
+```
+
+Register this redirect URI with your provider (derived from `base_url`):
+
+```
+<base_url>/api/dashboard/auth/oidc/callback
+```
+
+First-time SSO users are created as regular users with no project access until an admin grants it; usernames are derived from the OIDC claims as described under [Login options](#more-details). Accounts are matched on the provider's subject, so a later email or name change never breaks the link.
+
 ## Fork
 
 This is a fork of [explodingcamera/liwan](https://github.com/explodingcamera/liwan), adding support for an OIDC/OAuth login flow.
