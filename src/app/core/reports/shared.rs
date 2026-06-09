@@ -5,6 +5,22 @@ use super::{Dimension, DimensionFilter, FilterType, Metric};
 
 pub(super) const SESSION_DURATION_SQL: &str = "interval '30 minutes'";
 
+pub fn validate_entity_filters(filters: &[DimensionFilter], allowed: &[String]) -> Result<()> {
+    for filter in filters {
+        if filter.dimension == Dimension::EntityId {
+            // Entity is a scope selector: only an exact, non-inverted match is meaningful.
+            if filter.filter_type != FilterType::Equal || filter.inversed == Some(true) {
+                bail!("Invalid entity filter");
+            }
+            let ok = filter.value.as_ref().is_some_and(|v| allowed.iter().any(|e| e == v));
+            if !ok {
+                bail!("Invalid entity filter value");
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn build_filter_clause(filters: &[DimensionFilter]) -> Result<(String, ParamVec<'_>)> {
     let mut params = ParamVec::new();
 
@@ -83,6 +99,7 @@ pub(super) fn build_filter_clause(filters: &[DimensionFilter]) -> Result<(String
 				Dimension::UtmTerm => format!("utm_term {filter_value}"),
 				Dimension::ScreenWidth => format!("screen_width {filter_value}"),
 				Dimension::Orientation => format!("orientation {filter_value}"),
+				Dimension::EntityId => format!("entity_id {filter_value}"),
 			})
 		})
 		.collect::<Result<Vec<String>>>()?;

@@ -206,7 +206,7 @@ pub fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
         Command::Dev(dev) => match dev.cmd {
             DevCommand::Seed(_) => {
                 let app = Liwan::try_new(config)?;
-                app.seed_database(10_000_000)?;
+                app.seed_database(5_000)?;
                 println!("Database seeded with test data");
             }
             DevCommand::GenerateOpenApi(_) => {

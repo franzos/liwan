@@ -103,6 +103,7 @@ export const dimensionNames: Record<Dimension, string> = {
 	utm_term: "Term",
 	screen_width: "Screen Width",
 	orientation: "Orientation",
+	entity_id: "Entity",
 };
 
 export const filterNames: Record<DimensionFilter["filterType"], string> = {

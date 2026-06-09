@@ -189,11 +189,20 @@ impl Liwan {
         use models::UserRole;
 
         let entities = vec![
-            ("entity-1", "Entity 1", "example.com", vec!["public-project".to_string(), "private-project".to_string()]),
-            // ("entity-2", "Entity 2", "test.example.com", vec!["private-project".to_string()]),
-            // ("entity-3", "Entity 3", "example.org", vec!["public-project".to_string()]),
+            (
+                "entity-1",
+                "Entity 1",
+                "example.com",
+                vec!["public-project".to_string(), "private-project".to_string(), "clients".to_string()],
+            ),
+            ("entity-2", "Entity 2", "test.example.com", vec!["clients".to_string()]),
+            ("entity-3", "Entity 3", "example.org", vec!["clients".to_string()]),
         ];
-        let projects = [("public-project", "Public Project", true), ("private-project", "Private Project", false)];
+        let projects = [
+            ("public-project", "Public Project", true),
+            ("private-project", "Private Project", false),
+            ("clients", "Clients", true),
+        ];
         let users = [("admin", "admin", UserRole::Admin), ("user", "user", UserRole::User)];
 
         for (username, password, role) in users {

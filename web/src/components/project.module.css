@@ -34,6 +34,12 @@
   }
 }
 
+.headerControls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .tables {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -5,6 +5,7 @@ mod stats;
 
 pub use dimension::dimension_report;
 pub use graph::{build_graph_buckets, overall_report};
+pub use shared::validate_entity_filters;
 pub use stats::{earliest_timestamp, online_users, overall_stats};
 
 use chrono::{DateTime, Utc};
@@ -128,6 +129,8 @@ pub enum Dimension {
     ScreenWidth,
     /// Screen orientation
     Orientation,
+    /// Tracked entity
+    EntityId,
 }
 
 impl Display for Dimension {
@@ -151,6 +154,7 @@ impl Display for Dimension {
             Self::UtmTerm => "utm_term",
             Self::ScreenWidth => "screen_width",
             Self::Orientation => "orientation",
+            Self::EntityId => "entity_id",
         })
     }
 }

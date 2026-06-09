@@ -2344,7 +2344,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "liwan"
-version = "1.5.0-fork.3"
+version = "1.5.0-fork.4"
 dependencies = [
  "ahash 0.8.12",
  "aide",

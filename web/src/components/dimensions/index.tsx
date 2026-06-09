@@ -278,6 +278,9 @@ const dimensionLabels: Record<Dimension, (value: DimensionTableRow, onSelect: ()
 			</>
 		);
 	},
+	entity_id: (value, onSelect) => (
+		<DimensionValueButton onSelect={onSelect}>{value.displayName || value.dimensionValue}</DimensionValueButton>
+	),
 	mobile: (value, onSelect) => (
 		<>
 			<MobileDeviceIcon isMobile={value.dimensionValue === "true"} size={24} />

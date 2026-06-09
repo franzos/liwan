@@ -12,6 +12,7 @@ import { cls } from "../utils";
 import { DimensionDropdownCard, DimensionTabs, DimensionTabsCard, PageDimensionTabsCard } from "./dimensions";
 import { LineGraph } from "./graph";
 import { SelectFilters } from "./project/filter";
+import { SelectEntity } from "./project/entity";
 import { SelectMetrics } from "./project/metric";
 import { ProjectHeader } from "./project/project";
 import { SelectRange } from "./project/range";
@@ -52,6 +53,8 @@ const getDimensionFilter = (dimension: Dimension, value: string): DimensionFilte
 		value: value,
 	};
 };
+
+const isEntityFilter = (f: DimensionFilter) => f.dimension === "entity_id" && f.filterType === "equal";
 
 export const Project = () => {
 	const [projectId, setProjectId] = useState<string | undefined>();
@@ -117,6 +120,28 @@ export const Project = () => {
 		[filters],
 	);
 
+	const selectedEntityId = useMemo(() => filters.find(isEntityFilter)?.value ?? undefined, [filters]);
+
+	// The entity scope has its own dropdown, so keep it out of the chip row.
+	const chipFilters = useMemo(() => visibleFilters.filter((f) => !isEntityFilter(f)), [visibleFilters]);
+
+	const setSelectedEntity = useCallback((entityId?: string) => {
+		setFilters((prev) => {
+			const rest = prev.filter((f) => !isEntityFilter(f));
+			return entityId ? [...rest, { dimension: "entity_id", filterType: "equal", value: entityId }] : rest;
+		});
+	}, []);
+
+	// SelectFilters only edits chip filters; merge back everything kept off the chip row (entity scope + hidden dimensions).
+	const onChangeChipFilters = useCallback(
+		(next: DimensionFilter[]) => {
+			setFilters((prev) =>
+				next.concat(prev.filter((f) => isEntityFilter(f) || (project?.hiddenDimensions ?? []).includes(f.dimension))),
+			);
+		},
+		[project?.hiddenDimensions],
+	);
+
 	const onSelectDimRow = useCallback(
 		(value: DimensionTableRow, dimension: Dimension) => {
 			toggleFilter(getDimensionFilter(dimension, value.dimensionValue));
@@ -150,7 +175,12 @@ export const Project = () => {
 				<div>
 					<div className={styles.projectHeader}>
 						<ProjectHeader project={project} stats={stats} />
-						<SelectRange onSelect={setRange} range={range} projectId={project.id} />
+						<div className={styles.headerControls}>
+							<SelectRange onSelect={setRange} range={range} projectId={project.id} />
+							{project.entities.length > 1 && (
+								<SelectEntity entities={project.entities} value={selectedEntityId} onChange={setSelectedEntity} />
+							)}
+						</div>
 					</div>
 					<SelectMetrics
 						data={stats}
@@ -160,8 +190,8 @@ export const Project = () => {
 						className={styles.projectStats}
 					/>
 					<SelectFilters
-						value={visibleFilters}
-						onChange={setFilters}
+						value={chipFilters}
+						onChange={onChangeChipFilters}
 						dimensions={dimensions.filter((dimension) => !project.hiddenDimensions.includes(dimension))}
 					/>
 				</div>

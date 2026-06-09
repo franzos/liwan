@@ -121,15 +121,18 @@ async fn project_graph_handler(
     Json(req): Json<GraphRequest>,
 ) -> ApiResult<Json<GraphResponse>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::IM_A_TEAPOT)?;
-    let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !can_access_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 
+    let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
+
     if app.is_metric_hidden(&project.id, &entities, req.metric) {
         http_bail!(StatusCode::BAD_REQUEST, "Metric is hidden for this project")
     }
+
+    reports::validate_entity_filters(&req.filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
 
     let conn = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
     let buckets = reports::build_graph_buckets(&req.range, req.interval, req.timezone.as_deref())
@@ -161,6 +164,7 @@ async fn project_stats_handler(
     }
 
     let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
+    reports::validate_entity_filters(&req.filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
     let (entities2, entities3) = (entities.clone(), entities.clone());
 
     let conn = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -203,11 +207,12 @@ async fn project_detailed_handler(
     Json(req): Json<DimensionRequest>,
 ) -> ApiResult<Json<DimensionResponse>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::NOT_FOUND)?;
-    let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !can_access_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
+
+    let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if app.is_metric_hidden(&project.id, &entities, req.metric) {
         http_bail!(StatusCode::BAD_REQUEST, "Metric is hidden for this project")
@@ -215,6 +220,8 @@ async fn project_detailed_handler(
     if app.is_dimension_hidden(&project.id, &entities, req.dimension) {
         http_bail!(StatusCode::BAD_REQUEST, "Dimension is hidden for this project")
     }
+
+    reports::validate_entity_filters(&req.filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
 
     let conn = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 

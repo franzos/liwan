@@ -52,6 +52,7 @@ pub fn dimension_report(
         Dimension::UtmTerm => ("utm_term", None),
         Dimension::ScreenWidth => ("screen_width", None),
         Dimension::Orientation => ("orientation", None),
+        Dimension::EntityId => ("entity_id", None),
     };
     let filters_sql = match (filters_sql.is_empty(), dimension_scope_sql) {
         (true, Some(scope)) => format!("and ({scope})"),

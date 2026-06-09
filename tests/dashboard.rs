@@ -56,3 +56,47 @@ async fn test_dashboard() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_entity_filter() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+
+    app.seed_database(100)?;
+
+    let stats_path = "/api/dashboard/project/public-project/stats";
+    let start = (Utc::now() - Duration::days(365)).to_rfc3339();
+    let end = Utc::now().to_rfc3339();
+
+    // Unfiltered baseline.
+    let base = client.post(stats_path, json!({"range":{"start":start,"end":end},"filters":[]})).await;
+    base.assert_status_success();
+    let base_views = base.json::<serde_json::Value>()["stats"]["totalViews"].clone();
+
+    // Valid entity filter. public-project only contains entity-1, so scoping to it
+    // must return the same totals as the unfiltered query.
+    let valid = client
+        .post(
+            stats_path,
+            json!({"range":{"start":start,"end":end},"filters":[
+                {"dimension":"entity_id","filterType":"equal","value":"entity-1"}
+            ]}),
+        )
+        .await;
+    valid.assert_status_success();
+    assert_eq!(valid.json::<serde_json::Value>()["stats"]["totalViews"], base_views);
+
+    // An entity that is not a member of public-project must be rejected.
+    let invalid = client
+        .post(
+            stats_path,
+            json!({"range":{"start":start,"end":end},"filters":[
+                {"dimension":"entity_id","filterType":"equal","value":"entity-2"}
+            ]}),
+        )
+        .await;
+    invalid.assert_status_bad_request();
+
+    Ok(())
+}
