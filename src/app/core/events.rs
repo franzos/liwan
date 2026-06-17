@@ -85,6 +85,57 @@ impl LiwanEvents {
         Ok(())
     }
 
+    /// Append events in a batch without touching session timing fields (bulk import path)
+    #[cfg(feature = "import")]
+    pub fn bulk_insert(&self, events: impl Iterator<Item = Event>) -> Result<()> {
+        let conn = self.duckdb.get()?;
+        let mut appender = conn.appender("events").context("Failed to get DuckDB appender")?;
+        for event in events {
+            appender.append_row(event_params![event]).context("Failed to append event to DuckDB")?;
+        }
+        appender.flush().context("Failed to flush events to DuckDB")?;
+        Ok(())
+    }
+
+    /// Recompute session timing fields for all of an entity's imported events in one pass
+    #[cfg(feature = "import")]
+    pub fn recompute_sessions(&self, entity_id: &str) -> Result<()> {
+        let conn = self.duckdb.get()?;
+        // rowid keeps same-second rows ordered deterministically and joins back without fan-out
+        let sql = "--sql
+            with cte as (
+                select
+                    rowid as row_id,
+                    created_at - lag(created_at) over (partition by visitor_group_id order by created_at, rowid) as time_from_last_event,
+                    lead(created_at) over (partition by visitor_group_id order by created_at, rowid) - created_at as time_to_next_event
+                from events
+                where entity_id = ? and starts_with(visitor_group_id, ?)
+            )
+            update events
+                set
+                    time_from_last_event = cte.time_from_last_event,
+                    time_to_next_event = cte.time_to_next_event
+                from cte
+                where events.rowid = cte.row_id;
+        ";
+        conn.execute(sql, params![entity_id, IMPORTED_VISITOR_PREFIX])
+            .context("Failed to recompute session times in DuckDB")?;
+        Ok(())
+    }
+
+    /// Delete an entity's imported events newer than the watermark, returning the deleted count
+    #[cfg(feature = "import")]
+    pub fn delete_imported_after(&self, entity_id: &str, watermark: DateTime<Utc>) -> Result<usize> {
+        let conn = self.duckdb.get()?;
+        let deleted = conn
+            .execute(
+                "delete from events where entity_id = ? and starts_with(visitor_group_id, ?) and created_at > ?::timestamp",
+                params![entity_id, IMPORTED_VISITOR_PREFIX, watermark],
+            )
+            .context("Failed to delete imported events from DuckDB")?;
+        Ok(deleted)
+    }
+
     /// Start processing events from the given channel. Blocks until the channel is closed
     pub async fn process_events(&self, events_rx: Receiver<Event>) -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -239,6 +290,9 @@ fn count_rows(conn: &Connection, sql: &str, params: impl duckdb::Params) -> Duck
     conn.query_row(sql, params, |row| row.get(0))
 }
 
+#[cfg(feature = "import")]
+pub const IMPORTED_VISITOR_PREFIX: &str = "i_";
+
 fn update_event_times(conn: &Connection, from_time: DateTime<Utc>, entities: &[String]) -> DuckResult<()> {
     if entities.is_empty() {
         return Ok(());
@@ -280,4 +334,160 @@ fn update_event_times(conn: &Connection, from_time: DateTime<Utc>, entities: &[S
     params.push(from_time);
     conn.execute(&sql, duckdb::params_from_iter(params))?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "import"))]
+mod tests {
+    use super::*;
+    use crate::app::Liwan;
+    use crate::config::Config;
+    use chrono::TimeZone;
+
+    fn event(entity_id: &str, visitor_group_id: &str, created_at: DateTime<Utc>) -> Event {
+        Event {
+            entity_id: entity_id.to_string(),
+            visitor_group_id: visitor_group_id.to_string(),
+            event: "pageview".to_string(),
+            created_at,
+            fqdn: None,
+            path: None,
+            referrer: None,
+            platform: None,
+            browser: None,
+            mobile: None,
+            country: None,
+            city: None,
+            utm_source: None,
+            utm_medium: None,
+            utm_campaign: None,
+            utm_content: None,
+            utm_term: None,
+            screen_width: None,
+            orientation: None,
+            track_sessions: true,
+        }
+    }
+
+    fn t0() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2023, 6, 1, 10, 0, 0).unwrap()
+    }
+
+    /// (visitor_group_id, time_from_last_event, time_to_next_event) in seconds, ordered by created_at, rowid
+    fn intervals(conn: &Connection, entity_id: &str) -> Vec<(String, Option<f64>, Option<f64>)> {
+        let mut stmt = conn
+            .prepare(
+                "select visitor_group_id, epoch(time_from_last_event), epoch(time_to_next_event) from events where entity_id = ? order by created_at, rowid",
+            )
+            .unwrap();
+        let rows = stmt.query_map(params![entity_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+        rows.collect::<DuckResult<_>>().unwrap()
+    }
+
+    #[test]
+    fn recompute_spans_batches_without_phantom_boundaries() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let start = t0();
+
+        let batch1 =
+            vec![event("ent", "i_visitor", start), event("ent", "i_visitor", start + chrono::Duration::seconds(30))];
+        let batch2 = vec![
+            event("ent", "i_visitor", start + chrono::Duration::seconds(60)),
+            event("ent", "i_visitor", start + chrono::Duration::hours(2)),
+        ];
+        app.events.bulk_insert(batch1.into_iter()).unwrap();
+        app.events.bulk_insert(batch2.into_iter()).unwrap();
+
+        let conn = app.events_conn().unwrap();
+        assert!(intervals(&conn, "ent").iter().all(|(_, from, to)| from.is_none() && to.is_none()));
+
+        app.events.recompute_sessions("ent").unwrap();
+        let rows = intervals(&conn, "ent");
+        assert_eq!(
+            rows,
+            vec![
+                ("i_visitor".to_string(), None, Some(30.0)),
+                ("i_visitor".to_string(), Some(30.0), Some(30.0)),
+                ("i_visitor".to_string(), Some(30.0), Some(7140.0)),
+                ("i_visitor".to_string(), Some(7140.0), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn recompute_same_second_events_is_deterministic() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let start = t0();
+
+        let events = vec![
+            event("ent", "i_visitor", start),
+            event("ent", "i_visitor", start),
+            event("ent", "i_visitor", start),
+            event("ent", "i_visitor", start + chrono::Duration::seconds(10)),
+        ];
+        app.events.bulk_insert(events.into_iter()).unwrap();
+
+        let conn = app.events_conn().unwrap();
+        let expected = vec![
+            ("i_visitor".to_string(), None, Some(0.0)),
+            ("i_visitor".to_string(), Some(0.0), Some(0.0)),
+            ("i_visitor".to_string(), Some(0.0), Some(10.0)),
+            ("i_visitor".to_string(), Some(10.0), None),
+        ];
+
+        app.events.recompute_sessions("ent").unwrap();
+        assert_eq!(intervals(&conn, "ent"), expected);
+
+        app.events.recompute_sessions("ent").unwrap();
+        assert_eq!(intervals(&conn, "ent"), expected);
+    }
+
+    #[test]
+    fn recompute_leaves_non_imported_rows_untouched() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let start = t0();
+
+        let events = vec![
+            event("ent", "iDecoyVisitor00", start),
+            event("ent", "iDecoyVisitor00", start + chrono::Duration::seconds(30)),
+            event("ent", "LiveVisitor00000", start),
+            event("ent", "LiveVisitor00000", start + chrono::Duration::seconds(30)),
+            event("other", "i_visitor", start),
+            event("other", "i_visitor", start + chrono::Duration::seconds(30)),
+        ];
+        app.events.bulk_insert(events.into_iter()).unwrap();
+        app.events.recompute_sessions("ent").unwrap();
+
+        let conn = app.events_conn().unwrap();
+        assert!(intervals(&conn, "ent").iter().all(|(_, from, to)| from.is_none() && to.is_none()));
+        assert!(intervals(&conn, "other").iter().all(|(_, from, to)| from.is_none() && to.is_none()));
+    }
+
+    #[test]
+    fn delete_imported_after_only_deletes_newer_imported_rows() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let start = t0();
+        let watermark = start + chrono::Duration::hours(1);
+
+        let events = vec![
+            event("ent", "i_visitor", start),
+            event("ent", "i_visitor", watermark),
+            event("ent", "i_visitor", start + chrono::Duration::hours(2)),
+            event("ent", "i_visitor", start + chrono::Duration::hours(3)),
+            event("ent", "iDecoyVisitor00", start + chrono::Duration::hours(2)),
+            event("ent", "LiveVisitor00000", start + chrono::Duration::hours(2)),
+            event("other", "i_visitor", start + chrono::Duration::hours(2)),
+        ];
+        app.events.bulk_insert(events.into_iter()).unwrap();
+
+        let deleted = app.events.delete_imported_after("ent", watermark).unwrap();
+        assert_eq!(deleted, 2);
+
+        let conn = app.events_conn().unwrap();
+        let remaining = intervals(&conn, "ent");
+        assert_eq!(
+            remaining.iter().map(|(visitor, ..)| visitor.as_str()).collect::<Vec<_>>(),
+            vec!["i_visitor", "i_visitor", "iDecoyVisitor00", "LiveVisitor00000"]
+        );
+        assert_eq!(intervals(&conn, "other").len(), 1);
+    }
 }

@@ -97,6 +97,9 @@ refinery-core={version="0.9", default-features=false}
 maxminddb={version="0.28", optional=true, features=["simdutf8"]}
 mimalloc={version="0.1"}
 
+# import
+matomo-rs={version="0.1", default-features=false, features=["reqwest", "reqwest-rustls", "chrono"], optional=true}
+
 [dev-dependencies]
 tempfile={version="3"}
 cookie={version="*", default-features=false}
@@ -108,6 +111,8 @@ jsonwebtoken={version="10", default-features=false, features=["rust_crypto"]}
 [features]
 default=["geoip"]
 geoip=["dep:maxminddb"]
+import=[]
+import-matomo=["import", "dep:matomo-rs"]
 __dev=[]
 
 [profile.dev]

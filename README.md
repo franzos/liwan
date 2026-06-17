@@ -90,6 +90,40 @@ allowed_domains = ["example.com", "acme.org"]    # required for domain_allowlist
 
 Rejections send the user back to the login page with a short explanation. Both fields also accept env overrides (`LIWAN_OIDC_REGISTRATION`, `LIWAN_OIDC_ALLOWED_DOMAINS` as a comma-separated list).
 
+### Importing from Matomo
+
+Liwan can import historical pageviews from a Matomo instance. The importer is opt-in at build time — default builds don't include it:
+
+```bash
+cargo build --release --features import-matomo
+```
+
+You need Matomo 5.0 or newer (the importer checks before doing anything else), an API token, and the liwan server must be **stopped** — DuckDB allows a single writer, the same limitation `prune` has.
+
+```bash
+MATOMO_TOKEN=... liwan import matomo \
+  --url https://matomo.example.com \
+  --site 3=blog --site 7=docs \
+  --since 2022-01-01
+```
+
+- `--site <idSite>=<entity_id>` maps a Matomo site to a liwan entity. Repeatable; one entity per site, and the entity must already exist.
+- `--since YYYY-MM-DD` is required on the first run per site.
+- The token can also be passed with `--token`, but prefer `MATOMO_TOKEN` — CLI arguments leak via `ps` and shell history.
+- `--page-size <n>` sets visits per API request (default 1000); `--dry-run` fetches and maps without writing anything.
+- `--drop-local-urls` skips pageviews whose URL host is `localhost` or a private/reserved IP (e.g. `127.0.0.1`) — useful for filtering local development traffic that was tracked into Matomo. Off by default, to match live tracking (which keeps these).
+
+Re-runs are incremental. The importer keeps a per-site checkpoint file under `<data_dir>/import/` and only fetches what's newer, in month-sized chunks. There's a one-hour lateness allowance: actions that arrive in Matomo more than about an hour after the fact (QueuedTracking, log importer) fall below the watermark and won't be picked up by later runs. To re-import from scratch, delete the checkpoint file and run again with `--since` — that's safe, since resuming first deletes previously imported rows newer than the watermark.
+
+The importer refuses to run when the target entity has day-based data retention or a drop rule that would discard every imported event — the next prune would just delete the history again. `--force` overrides this if you know what you're doing.
+
+Do expect the numbers to differ from Matomo's own, and from live liwan tracking:
+
+- Cookieless Matomo sites count uniques per day, so liwan shows more unique visitors over multi-day ranges. Imported visitors are also distinct from live visitors — someone tracked by both appears twice.
+- Only pageviews are imported; downloads, events, and goals between pageviews are dropped, which skews bounce rate and time-on-site (bounce rate generally higher).
+- Time-on-site isn't comparable to Matomo's: liwan averages the gap between consecutive pageviews (single-page sessions excluded), while Matomo divides total visit length by all visits (bounces counted as zero). On bounce-heavy sites liwan's figure reads much higher. This is how liwan computes the metric for live data too, not an import artifact.
+- Bot filtering is Matomo's, not liwan's. Device and OS mapping is best-effort. City names can differ between GeoIP databases.
+
 ## Fork
 
 This is a fork of [explodingcamera/liwan](https://github.com/explodingcamera/liwan), adding support for an OIDC/OAuth login flow.

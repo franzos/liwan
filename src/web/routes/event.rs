@@ -1,8 +1,7 @@
-use crate::app::models::{
-    FilterType, GeoDetail, IngestDropRule, IngestFilter, ResolvedCollectionSettings, VisitorGroupMode,
-};
+use crate::app::models::{GeoDetail, ResolvedCollectionSettings, VisitorGroupMode};
 use crate::app::{Liwan, models::Event};
 use crate::utils::hash::{visitor_group_id, visitor_group_id_cidr, visitor_group_id_fallback};
+use crate::utils::ingest::{Utm, clean_referrer, extract_utm, normalize_url};
 use crate::utils::referrer::{Referrer, process_referer};
 use crate::utils::useragent;
 use crate::web::RouterState;
@@ -87,58 +86,6 @@ impl EventRequest {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Utm {
-    source: Option<String>,
-    content: Option<String>,
-    medium: Option<String>,
-    campaign: Option<String>,
-    term: Option<String>,
-}
-
-fn extract_query(url: &mut Url, keys: &[&str]) -> Option<String> {
-    let value = keys
-        .iter()
-        .find_map(|key| url.query_pairs().find(|(name, _)| name == *key).map(|(_, value)| value.into_owned()));
-
-    if let Some(value) = &value {
-        let filtered = url
-            .query_pairs()
-            .filter(|(name, _)| !keys.contains(&name.as_ref()))
-            .map(|(name, value)| (name.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-
-        let mut pairs = url.query_pairs_mut();
-        pairs.clear();
-        drop(pairs);
-
-        if !filtered.is_empty() {
-            let mut pairs = url.query_pairs_mut();
-            pairs.extend_pairs(filtered.iter().map(|(name, value)| (name.as_str(), value.as_str())));
-        }
-
-        if value.trim().is_empty() {
-            return None;
-        }
-
-        if value.len() > 255 {
-            return None;
-        }
-    }
-
-    value
-}
-
-fn extract_utm(url: &mut Url) -> Utm {
-    Utm {
-        campaign: extract_query(url, &["utm_campaign", "campaign"]),
-        content: extract_query(url, &["utm_content", "content"]),
-        medium: extract_query(url, &["utm_medium", "medium"]),
-        source: extract_query(url, &["utm_source", "source", "ref", "referrer", "referer"]),
-        term: extract_query(url, &["utm_term", "term"]),
-    }
-}
-
 static EXISTING_ENTITIES: LazyLock<quick_cache::sync::Cache<String, ()>> =
     LazyLock::new(|| quick_cache::sync::Cache::new(512));
 
@@ -185,8 +132,7 @@ fn process_event(
         Referrer::Spammer => return Ok(None),
         Referrer::Local => return Ok(None),
     };
-    let referrer = referrer.map(|r| r.trim_start_matches("www.").to_string()); // remove www. prefix
-    let referrer = referrer.filter(|r| r.trim().len() > 3); // ignore empty or short referrers
+    let referrer = clean_referrer(referrer);
 
     if EXISTING_ENTITIES.get(&event.entity_id).is_none() {
         if !app.entities.exists(&event.entity_id).unwrap_or(false) {
@@ -223,10 +169,7 @@ fn process_event(
     let (country, city) = (None, None);
 
     let utm = if settings.track_utm_params { extract_utm(&mut url) } else { Utm::default() };
-    url.set_query(None);
-    let path = url.path().to_string();
-    let path = if path.len() > 1 && path.ends_with('/') { path.trim_end_matches('/').to_string() } else { path };
-    let fqdn = url.host_str().unwrap_or_default().to_string();
+    let (path, fqdn) = normalize_url(url);
 
     let event = Event {
         visitor_group_id,
@@ -251,67 +194,11 @@ fn process_event(
         track_sessions: settings.track_sessions,
     };
 
-    if settings.ingest_drop_rules.iter().any(|rule| ingest_drop_rule_matches(&event, rule)) {
+    if settings.ingest_drop_rules.iter().any(|rule| rule.matches(&event)) {
         return Ok(None);
     }
 
     Ok(Some(event))
-}
-
-fn ingest_drop_rule_matches(event: &Event, rule: &IngestDropRule) -> bool {
-    !rule.filters.is_empty() && rule.filters.iter().all(|filter| ingest_filter_matches(event, filter))
-}
-
-fn ingest_filter_matches(event: &Event, filter: &IngestFilter) -> bool {
-    if filter.dimension == "mobile" {
-        return match filter.filter_type {
-            FilterType::IsNull => event.mobile.is_none(),
-            FilterType::IsTrue => event.mobile == Some(true),
-            FilterType::IsFalse => event.mobile == Some(false),
-            _ => false,
-        };
-    }
-
-    let url;
-    let value = match filter.dimension.as_str() {
-        "event" => Some(event.event.as_str()),
-        "url" => {
-            url = format!("{}{}", event.fqdn.as_deref().unwrap_or_default(), event.path.as_deref().unwrap_or_default());
-            Some(url.as_str())
-        }
-        "fqdn" => event.fqdn.as_deref(),
-        "path" => event.path.as_deref(),
-        "referrer" => event.referrer.as_deref(),
-        "country" => event.country.as_deref(),
-        "city" => event.city.as_deref(),
-        "platform" => event.platform.as_deref(),
-        "browser" => event.browser.as_deref(),
-        "utm_source" => event.utm_source.as_deref(),
-        "utm_medium" => event.utm_medium.as_deref(),
-        "utm_campaign" => event.utm_campaign.as_deref(),
-        "utm_content" => event.utm_content.as_deref(),
-        "utm_term" => event.utm_term.as_deref(),
-        "screen_width" => event.screen_width.as_deref(),
-        "orientation" => event.orientation.as_deref(),
-        _ => return false,
-    };
-
-    match filter.filter_type {
-        FilterType::IsNull => value.is_none(),
-        FilterType::Equal => {
-            value.zip(filter.value.as_deref()).is_some_and(|(value, filter)| value.eq_ignore_ascii_case(filter))
-        }
-        FilterType::Contains => value
-            .zip(filter.value.as_deref())
-            .is_some_and(|(value, filter)| value.to_ascii_lowercase().contains(&filter.to_ascii_lowercase())),
-        FilterType::StartsWith => value
-            .zip(filter.value.as_deref())
-            .is_some_and(|(value, filter)| value.to_ascii_lowercase().starts_with(&filter.to_ascii_lowercase())),
-        FilterType::EndsWith => value
-            .zip(filter.value.as_deref())
-            .is_some_and(|(value, filter)| value.to_ascii_lowercase().ends_with(&filter.to_ascii_lowercase())),
-        _ => false,
-    }
 }
 
 fn resolve_visitor_group_id(
@@ -330,145 +217,5 @@ fn resolve_visitor_group_id(
             };
             visitor_group_id_cidr(&ip, ipv4_prefix, ipv6_prefix, daily_salt, entity_id)
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn extract_utm_clears_all_query_params() {
-        let mut url = Url::parse(
-            "https://example.com/path/?utm_source=newsletter&source=ignored&campaign=spring&utm_medium=email&foo=bar&ref=backup",
-        )
-        .expect("valid url");
-
-        let utm = extract_utm(&mut url);
-        url.set_query(None);
-
-        assert_eq!(utm.source.as_deref(), Some("newsletter"));
-        assert_eq!(utm.medium.as_deref(), Some("email"));
-        assert_eq!(utm.campaign.as_deref(), Some("spring"));
-        assert_eq!(utm.content, None);
-        assert_eq!(utm.term, None);
-        assert_eq!(url.as_str(), "https://example.com/path/");
-    }
-
-    #[test]
-    fn unknown_ingest_filter_dimension_does_not_match_null() {
-        let event = Event {
-            entity_id: "entity".to_string(),
-            visitor_group_id: "visitor".to_string(),
-            event: "pageview".to_string(),
-            created_at: Utc::now(),
-            fqdn: None,
-            path: None,
-            referrer: None,
-            platform: None,
-            browser: None,
-            mobile: None,
-            country: None,
-            city: None,
-            utm_source: None,
-            utm_medium: None,
-            utm_campaign: None,
-            utm_content: None,
-            utm_term: None,
-            screen_width: None,
-            orientation: None,
-            track_sessions: true,
-        };
-
-        assert!(!ingest_filter_matches(
-            &event,
-            &IngestFilter { dimension: "unknown".to_string(), filter_type: FilterType::IsNull, value: None },
-        ));
-    }
-
-    #[test]
-    fn ingest_drop_rule_requires_all_filters_to_match() {
-        let event = Event {
-            entity_id: "entity".to_string(),
-            visitor_group_id: "visitor".to_string(),
-            event: "pageview".to_string(),
-            created_at: Utc::now(),
-            fqdn: Some("example.com".to_string()),
-            path: Some("/pricing".to_string()),
-            referrer: None,
-            platform: None,
-            browser: None,
-            mobile: None,
-            country: None,
-            city: None,
-            utm_source: Some("newsletter".to_string()),
-            utm_medium: None,
-            utm_campaign: None,
-            utm_content: None,
-            utm_term: None,
-            screen_width: None,
-            orientation: None,
-            track_sessions: true,
-        };
-
-        let matching_rule = IngestDropRule {
-            filters: vec![
-                IngestFilter {
-                    dimension: "path".to_string(),
-                    filter_type: FilterType::Equal,
-                    value: Some("/pricing".to_string()),
-                },
-                IngestFilter {
-                    dimension: "utm_source".to_string(),
-                    filter_type: FilterType::Equal,
-                    value: Some("newsletter".to_string()),
-                },
-            ],
-        };
-        let non_matching_rule = IngestDropRule {
-            filters: vec![
-                IngestFilter {
-                    dimension: "path".to_string(),
-                    filter_type: FilterType::Equal,
-                    value: Some("/pricing".to_string()),
-                },
-                IngestFilter {
-                    dimension: "utm_source".to_string(),
-                    filter_type: FilterType::Equal,
-                    value: Some("ads".to_string()),
-                },
-            ],
-        };
-
-        assert!(ingest_drop_rule_matches(&event, &matching_rule));
-        assert!(!ingest_drop_rule_matches(&event, &non_matching_rule));
-    }
-
-    #[test]
-    fn empty_ingest_drop_rule_does_not_match() {
-        let event = Event {
-            entity_id: "entity".to_string(),
-            visitor_group_id: "visitor".to_string(),
-            event: "pageview".to_string(),
-            created_at: Utc::now(),
-            fqdn: None,
-            path: None,
-            referrer: None,
-            platform: None,
-            browser: None,
-            mobile: None,
-            country: None,
-            city: None,
-            utm_source: None,
-            utm_medium: None,
-            utm_campaign: None,
-            utm_content: None,
-            utm_term: None,
-            screen_width: None,
-            orientation: None,
-            track_sessions: true,
-        };
-
-        assert!(!ingest_drop_rule_matches(&event, &IngestDropRule { filters: Vec::new() }));
     }
 }

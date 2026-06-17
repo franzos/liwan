@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     let (s, r) = tokio::sync::mpsc::channel::<Event>(1024 * 10);
 
     if let Some(cmd) = args.cmd {
-        return cli::handle_command(config, cmd);
+        return cli::handle_command(config, cmd).await;
     }
 
     let app = Liwan::try_new(config)?;

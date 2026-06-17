@@ -208,7 +208,7 @@ pub fn public_ip(ip: Option<IpAddr>) -> Option<IpAddr> {
     ip.filter(is_public_ip)
 }
 
-fn is_public_ip(ip: &IpAddr) -> bool {
+pub fn is_public_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => {
             !(ipv4.is_private()

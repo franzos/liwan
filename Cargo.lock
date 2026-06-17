@@ -2371,6 +2371,7 @@ dependencies = [
  "http",
  "ipnet",
  "jsonwebtoken",
+ "matomo-rs",
  "maxminddb",
  "md-5",
  "mimalloc",
@@ -2436,6 +2437,27 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "matomo-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08b2a836eb305c9e82a8221820d870b4e39f22af8d7bbe628b7c0c7b32d2197a"
+dependencies = [
+ "bytes",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "http",
+ "reqwest 0.13.4",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "serde_with",
+ "thiserror 2.0.18",
+ "url",
+]
 
 [[package]]
 name = "maxminddb"
@@ -3789,6 +3811,15 @@ dependencies = [
  "generic-array",
  "pkcs8",
  "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
  "zeroize",
 ]
 

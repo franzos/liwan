@@ -32,6 +32,8 @@ pub enum Command {
     AddUser(AddUser),
     Users(ListUsers),
     Prune(Prune),
+    #[cfg(feature = "import")]
+    Import(Import),
     #[cfg(debug_assertions)]
     Dev(Dev),
 }
@@ -43,6 +45,61 @@ pub struct Prune {
     #[argh(switch)]
     /// show what would be pruned without changing data
     dry_run: bool,
+}
+
+#[derive(FromArgs)]
+#[cfg(feature = "import")]
+#[argh(subcommand, name = "import")]
+/// Import analytics data from another platform
+pub struct Import {
+    #[argh(subcommand)]
+    cmd: ImportCommand,
+}
+
+#[derive(FromArgs)]
+#[cfg(feature = "import")]
+#[argh(subcommand)]
+pub enum ImportCommand {
+    #[cfg(feature = "import-matomo")]
+    Matomo(ImportMatomo),
+}
+
+#[derive(FromArgs)]
+#[cfg(feature = "import-matomo")]
+#[argh(subcommand, name = "matomo")]
+/// Import data from a Matomo instance
+pub struct ImportMatomo {
+    #[argh(option)]
+    /// base URL of the Matomo instance (e.g. https://matomo.example.com)
+    url: String,
+
+    #[argh(option)]
+    /// matomo API token; prefer the MATOMO_TOKEN environment variable
+    token: Option<String>,
+
+    #[argh(option)]
+    /// site mapping <idSite>=<entity_id>; repeatable, at least one required
+    site: Vec<String>,
+
+    #[argh(option)]
+    /// start date (YYYY-MM-DD, UTC); required on the first run per site
+    since: Option<String>,
+
+    #[argh(option, default = "1000")]
+    /// number of visits to fetch per API request (default: 1000)
+    page_size: u32,
+
+    #[argh(switch)]
+    /// fetch and map without writing anything (still pages the full window)
+    dry_run: bool,
+
+    #[argh(switch)]
+    /// import even when entity settings would destroy imported data
+    force: bool,
+
+    #[argh(switch)]
+    /// skip pageviews whose URL host is localhost or a private/reserved IP (live ingest keeps these)
+    drop_local_urls: bool,
 }
 
 #[derive(FromArgs)]
@@ -125,7 +182,7 @@ pub struct AddUser {
     admin: bool,
 }
 
-pub fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
+pub async fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
     config.geoip = GeoIpConfig::default(); // disable GeoIP in CLI commands
 
     match cmd {
@@ -202,6 +259,23 @@ pub fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
                 println!("Dry run only. Re-run without --dry-run to apply changes.");
             }
         }
+        #[cfg(feature = "import")]
+        Command::Import(import) => match import.cmd {
+            #[cfg(feature = "import-matomo")]
+            ImportCommand::Matomo(matomo) => {
+                let options = crate::app::import::run::MatomoImportOptions {
+                    url: matomo.url,
+                    token: matomo.token,
+                    sites: matomo.site,
+                    since: matomo.since,
+                    page_size: matomo.page_size,
+                    dry_run: matomo.dry_run,
+                    force: matomo.force,
+                    drop_local_urls: matomo.drop_local_urls,
+                };
+                crate::app::import::run::run_matomo(config, options).await?;
+            }
+        },
         #[cfg(debug_assertions)]
         Command::Dev(dev) => match dev.cmd {
             DevCommand::Seed(_) => {

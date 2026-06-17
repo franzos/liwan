@@ -38,6 +38,20 @@ pub fn visitor_group_id_cidr(
 }
 
 fn hash_visitor_group(parts: &[&[u8]]) -> String {
+    hash_base62(parts, 16)
+}
+
+/// Stable visitor group id for imported events: prefix + 14 hash chars, same 16-char width as live ids
+#[cfg(feature = "import")]
+pub fn visitor_group_id_import(visitor_id: &str, entity_id: &str) -> String {
+    format!(
+        "{}{}",
+        crate::app::IMPORTED_VISITOR_PREFIX,
+        hash_base62(&[visitor_id.as_bytes(), entity_id.as_bytes()], 14)
+    )
+}
+
+fn hash_base62(parts: &[&[u8]], len: usize) -> String {
     const CHARS: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     let mut hasher = blake3::Hasher::new();
     for part in parts {
@@ -45,8 +59,8 @@ fn hash_visitor_group(parts: &[&[u8]]) -> String {
     }
     let hash = hasher.finalize();
 
-    let mut result = String::with_capacity(16);
-    for byte in hash.as_bytes().iter().take(16) {
+    let mut result = String::with_capacity(len);
+    for byte in hash.as_bytes().iter().take(len) {
         result.push(CHARS[(byte % 62) as usize] as char);
     }
     result

@@ -1,6 +1,8 @@
 mod core;
 mod db;
 
+#[cfg(feature = "import")]
+pub mod import;
 pub mod models;
 pub use core::reports;
 use std::sync::Arc;
@@ -21,6 +23,8 @@ use reports::{Dimension, Metric};
 pub type DuckDBConn = r2d2::PooledConnection<DuckdbConnectionManager>;
 pub type DuckDBPool = r2d2::Pool<DuckdbConnectionManager>;
 pub type SqlitePool = r2d2::Pool<SqliteConnectionManager>;
+#[cfg(feature = "import")]
+pub use core::IMPORTED_VISITOR_PREFIX;
 pub use core::PruneStats;
 
 pub struct Liwan {
