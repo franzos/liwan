@@ -18,11 +18,11 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync. The base is upstream `main`, which at the time of forking sat several commits past the upstream `v1.5.0` tag — only the entries below are this fork's own changes; everything else comes from upstream.
 -->
 
-## [Unreleased]
+## [v1.5.0-fork.5] - 2026-06-18
 
 ### Features
 
-- Import historical pageviews from Matomo with `liwan import matomo` (opt-in: build with the `import-matomo` cargo feature)
+- Import historical pageviews from Matomo with `liwan import matomo` (included in the official release and Docker builds)
 - Matomo import: `--drop-local-urls` to skip pageviews tracked against `localhost` or private/reserved IPs (e.g. local development traffic)
 
 ## [v1.5.0-fork.4] - 2026-06-09

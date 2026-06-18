@@ -79,6 +79,7 @@ jobs:
           bin: liwan
           target: ${{ matrix.target }}
           build-tool: ${{ matrix.build-tool }}
+          features: import-matomo
           token: ${{ secrets.GITHUB_TOKEN }}
 
   publish-container:
