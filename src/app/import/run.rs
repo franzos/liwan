@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use ::matomo::MatomoClient;
 use anyhow::{Context, Result, bail};
@@ -25,6 +26,9 @@ pub struct MatomoImportOptions {
     pub dry_run: bool,
     pub force: bool,
     pub drop_local_urls: bool,
+    pub max_retries: u32,
+    pub retry_base_delay: Duration,
+    pub page_delay: Duration,
 }
 
 pub async fn run_matomo(config: Config, opts: MatomoImportOptions) -> Result<()> {
@@ -62,6 +66,12 @@ pub async fn run_matomo(config: Config, opts: MatomoImportOptions) -> Result<()>
         page_size,
         dry_run: opts.dry_run,
         drop_local_urls: opts.drop_local_urls,
+        policy: matomo::RetryPolicy {
+            max_retries: opts.max_retries,
+            base_delay: opts.retry_base_delay,
+            cap: Duration::from_secs(60),
+        },
+        page_delay: opts.page_delay,
         run_start: Utc::now(),
     };
 
@@ -92,6 +102,8 @@ struct SiteImport<'a> {
     page_size: NonZeroU32,
     dry_run: bool,
     drop_local_urls: bool,
+    policy: matomo::RetryPolicy,
+    page_delay: Duration,
     run_start: DateTime<Utc>,
 }
 
@@ -142,7 +154,8 @@ async fn import_chunks(
         let mut chunk_events = 0u64;
 
         loop {
-            let visits = matomo::fetch_page(ctx.client, mapping.id_site, (lo, hi), ctx.page_size, offset).await?;
+            let visits =
+                matomo::fetch_page(ctx.client, mapping.id_site, (lo, hi), ctx.page_size, offset, ctx.policy).await?;
             if visits.is_empty() {
                 break;
             }
@@ -171,6 +184,10 @@ async fn import_chunks(
             offset += ctx.page_size.get();
             if pages.is_multiple_of(PROGRESS_EVERY_PAGES) {
                 println!("{}: chunk ({lo}, {hi}]: {pages} pages so far, {chunk_events} events", mapping.entity_id);
+            }
+
+            if ctx.page_delay > Duration::ZERO {
+                tokio::time::sleep(ctx.page_delay).await;
             }
         }
 

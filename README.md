@@ -112,6 +112,39 @@ MATOMO_TOKEN=... liwan import matomo \
 - The token can also be passed with `--token`, but prefer `MATOMO_TOKEN` — CLI arguments leak via `ps` and shell history.
 - `--page-size <n>` sets visits per API request (default 1000); `--dry-run` fetches and maps without writing anything.
 - `--drop-local-urls` skips pageviews whose URL host is `localhost` or a private/reserved IP (e.g. `127.0.0.1`) — useful for filtering local development traffic that was tracked into Matomo. Off by default, to match live tracking (which keeps these).
+- `--max-retries`, `--retry-base-delay` (seconds) and `--page-delay` (milliseconds) tune rate-limit handling. A 429 (or a transient 5xx/timeout) backs off exponentially and retries instead of aborting the site; `--page-delay` adds a fixed pause between pages so a large site self-throttles before it ever hits the limit.
+
+#### Batch import against a Docker deployment
+
+When liwan runs in Docker, the same single-writer rule applies: stop the service, run a one-off importer container with `docker compose run`, then start it again. A small wrapper handles a list of sites, a cooldown between them, and Ctrl-C:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# DuckDB is single-writer — the server has to be down while we import.
+# Restart it on Ctrl-C so an abort doesn't leave tracking offline.
+trap 'echo; echo "Aborted."; docker compose start liwan; exit 130' INT
+
+COOLDOWN="${COOLDOWN:-15}"   # seconds between sites, so Matomo doesn't 429 the next import
+
+run() {
+    docker compose run --rm -e MATOMO_TOKEN liwan \
+        import matomo \
+        --url https://matomo.example.com \
+        --site "$1" \
+        --since 2022-01-01 \
+        --page-delay 250
+    sleep "$COOLDOWN"
+}
+
+docker compose stop liwan        # release the DB writer lock
+run 3=blog
+run 7=docs
+docker compose start liwan       # bring tracking back up
+```
+
+Export the token in the parent shell first (`export MATOMO_TOKEN=...`) so `-e MATOMO_TOKEN` passes it through without baking it into the script. Replace `liwan` with your compose service name. Because re-runs are incremental, a site that 429s past its retries can just be run again — it resumes from its checkpoint.
 
 Re-runs are incremental. The importer keeps a per-site checkpoint file under `<data_dir>/import/` and only fetches what's newer, in month-sized chunks. There's a one-hour lateness allowance: actions that arrive in Matomo more than about an hour after the fact (QueuedTracking, log importer) fall below the watermark and won't be picked up by later runs. To re-import from scratch, delete the checkpoint file and run again with `--since` — that's safe, since resuming first deletes previously imported rows newer than the watermark.
 

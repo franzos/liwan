@@ -100,6 +100,18 @@ pub struct ImportMatomo {
     #[argh(switch)]
     /// skip pageviews whose URL host is localhost or a private/reserved IP (live ingest keeps these)
     drop_local_urls: bool,
+
+    #[argh(option, default = "5")]
+    /// max retries on rate-limit/transient errors before giving up (default: 5)
+    max_retries: u32,
+
+    #[argh(option, default = "2")]
+    /// base seconds for exponential retry backoff, capped at 60s (default: 2)
+    retry_base_delay: u64,
+
+    #[argh(option, default = "0")]
+    /// milliseconds to wait between pages within a site to avoid rate limits (default: 0, off)
+    page_delay: u64,
 }
 
 #[derive(FromArgs)]
@@ -272,6 +284,9 @@ pub async fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
                     dry_run: matomo.dry_run,
                     force: matomo.force,
                     drop_local_urls: matomo.drop_local_urls,
+                    max_retries: matomo.max_retries,
+                    retry_base_delay: std::time::Duration::from_secs(matomo.retry_base_delay),
+                    page_delay: std::time::Duration::from_millis(matomo.page_delay),
                 };
                 crate::app::import::run::run_matomo(config, options).await?;
             }

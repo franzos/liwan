@@ -1,8 +1,10 @@
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, NaiveDate, TimeDelta, Utc};
-use matomo::{ActionDetail, Auth, DateRange, Limit, MatomoClient, Params, Period, Visit};
+use matomo::{ActionDetail, ApiErrorKind, Auth, DateRange, Limit, MatomoClient, Params, Period, Visit};
+use reqwest::StatusCode;
 use url::Url;
 
 use crate::app::import::ImportStats;
@@ -20,6 +22,39 @@ pub fn client(base_url: &str, token: &str) -> Result<MatomoClient> {
         .context("failed to create Matomo client")
 }
 
+/// Retry schedule for transient Matomo failures (rate limits, gateway errors, timeouts)
+#[derive(Clone, Copy)]
+pub struct RetryPolicy {
+    pub max_retries: u32,
+    pub base_delay: Duration,
+    pub cap: Duration,
+}
+
+fn is_retryable(err: &matomo::Error) -> bool {
+    match err {
+        matomo::Error::Http(e) => {
+            e.is_timeout()
+                || matches!(
+                    e.status(),
+                    Some(
+                        StatusCode::TOO_MANY_REQUESTS
+                            | StatusCode::BAD_GATEWAY
+                            | StatusCode::SERVICE_UNAVAILABLE
+                            | StatusCode::GATEWAY_TIMEOUT
+                    )
+                )
+        }
+        matomo::Error::Api { kind: ApiErrorKind::RateLimited, .. } => true,
+        _ => false,
+    }
+}
+
+fn backoff_delay(attempt: u32, base: Duration, cap: Duration) -> Duration {
+    let factor = 2u32.checked_pow(attempt);
+    let delay = factor.and_then(|f| base.checked_mul(f)).unwrap_or(cap);
+    delay.min(cap)
+}
+
 /// Fetch one page of `Live.getLastVisitsDetails` for the chunk `(lo, hi]`; an empty page means done
 pub async fn fetch_page(
     client: &MatomoClient,
@@ -27,6 +62,7 @@ pub async fn fetch_page(
     (lo, hi): (DateTime<Utc>, DateTime<Utc>),
     page_size: NonZeroU32,
     offset: u32,
+    policy: RetryPolicy,
 ) -> Result<Vec<Visit>> {
     let id_site = u32::try_from(id_site).with_context(|| format!("site id {id_site} out of range"))?;
     // the ±1 day absorbs site-local-vs-UTC skew; minTimestamp and the mapping's window filter do the exact cut
@@ -40,10 +76,27 @@ pub async fn fetch_page(
         .offset(offset)
         .set("minTimestamp", lo.timestamp().to_string());
 
-    client
-        .call_typed::<Vec<Visit>>("Live.getLastVisitsDetails", &params)
-        .await
-        .with_context(|| format!("Live.getLastVisitsDetails failed for site {id_site} at offset {offset}"))
+    let mut attempt = 0u32;
+    loop {
+        match client.call_typed::<Vec<Visit>>("Live.getLastVisitsDetails", &params).await {
+            Ok(visits) => return Ok(visits),
+            Err(err) if is_retryable(&err) && attempt < policy.max_retries => {
+                let delay = backoff_delay(attempt, policy.base_delay, policy.cap);
+                tracing::warn!(
+                    "site {id_site} offset {offset}: transient error on attempt {}, retrying in {:.1}s: {err}",
+                    attempt + 1,
+                    delay.as_secs_f64()
+                );
+                tokio::time::sleep(delay).await;
+                attempt += 1;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Live.getLastVisitsDetails failed for site {id_site} at offset {offset}")
+                });
+            }
+        }
+    }
 }
 
 fn ymd(date: NaiveDate) -> (u16, u8, u8) {
@@ -224,6 +277,39 @@ mod tests {
         let mut stats = ImportStats::default();
         let events = map_visit(&visits()[0], "blog", settings, window(), false, &mut stats);
         (events, stats)
+    }
+
+    #[test]
+    fn backoff_is_exponential_and_clamped() {
+        let base = Duration::from_secs(2);
+        let cap = Duration::from_secs(60);
+        let schedule: Vec<u64> = (0..=6).map(|a| backoff_delay(a, base, cap).as_secs()).collect();
+        assert_eq!(schedule, vec![2, 4, 8, 16, 32, 60, 60]);
+        // an attempt large enough to overflow the multiplication saturates to cap
+        assert_eq!(backoff_delay(64, base, cap), cap);
+    }
+
+    #[test]
+    fn is_retryable_classifies_constructible_variants() {
+        // Http-status branch verified against the live instance; reqwest::Error isn't constructible in tests
+        let rate_limited = matomo::Error::Api {
+            message: "rate limit exceeded".to_string(),
+            method: "Live.getLastVisitsDetails",
+            kind: ApiErrorKind::RateLimited,
+        };
+        assert!(is_retryable(&rate_limited));
+
+        let auth = matomo::Error::Api {
+            message: "token_auth invalid".to_string(),
+            method: "Live.getLastVisitsDetails",
+            kind: ApiErrorKind::Auth,
+        };
+        assert!(!is_retryable(&auth));
+
+        let non_json = matomo::Error::NonJsonBody { method: "Live.getLastVisitsDetails", body: "<html>".to_string() };
+        assert!(!is_retryable(&non_json));
+
+        assert!(!is_retryable(&matomo::Error::Config("bad url".to_string())));
     }
 
     #[test]
