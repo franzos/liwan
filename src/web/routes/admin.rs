@@ -19,7 +19,7 @@ use crate::{
         },
         reports::{Dimension, Metric},
     },
-    utils::validate::can_access_project,
+    utils::validate::{can_enumerate_project, can_view_project},
     web::{
         RouterState,
         session::{Auth, MaybeAuth},
@@ -94,6 +94,8 @@ struct UpdateProjectRequest {
 struct UpdateProjectInfo {
     display_name: String,
     public: bool,
+    #[serde(default)]
+    unlisted: bool,
     secret: Option<String>,
 }
 
@@ -107,6 +109,8 @@ struct UpdatePasswordRequest {
 struct CreateProjectRequest {
     display_name: String,
     public: bool,
+    #[serde(default)]
+    unlisted: bool,
     secret: Option<String>,
     entities: Vec<String>,
 }
@@ -118,6 +122,7 @@ pub struct ProjectResponse {
     pub display_name: String,
     pub entities: Vec<ProjectEntity>,
     pub public: bool,
+    pub unlisted: bool,
     pub hidden_metrics: Vec<Metric>,
     pub hidden_dimensions: Vec<Dimension>,
 }
@@ -147,6 +152,7 @@ impl ProjectResponse {
                 .map(|entity| ProjectEntity { id: entity.id, display_name: entity.display_name })
                 .collect(),
             public: project.public,
+            unlisted: project.unlisted,
             hidden_metrics: Metric::all()
                 .iter()
                 .copied()
@@ -175,6 +181,7 @@ struct EntityProject {
     id: String,
     display_name: String,
     public: bool,
+    unlisted: bool,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -352,6 +359,7 @@ async fn project_create_handler(
                 id: project_id,
                 display_name: project.display_name,
                 public: project.public,
+                unlisted: project.unlisted,
                 secret: project.secret,
             },
             project.entities.as_slice(),
@@ -377,6 +385,7 @@ async fn project_update_handler(
                 id: project_id.clone(),
                 display_name: project.display_name,
                 public: project.public,
+                unlisted: project.unlisted,
                 secret: project.secret,
             })
             .http_err("Failed to update project", StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -396,7 +405,7 @@ async fn projects_handler(
     MaybeAuth(user): MaybeAuth,
 ) -> ApiResult<UseApi<impl IntoApiResponse, Json<ProjectsResponse>>> {
     let projects = app.projects.all().http_err("Failed to get projects", StatusCode::INTERNAL_SERVER_ERROR)?;
-    let projects: Vec<Project> = projects.into_iter().filter(|p| can_access_project(p, user.as_ref())).collect();
+    let projects: Vec<Project> = projects.into_iter().filter(|p| can_enumerate_project(p, user.as_ref())).collect();
 
     let mut resp = Vec::new();
     for project in projects {
@@ -414,7 +423,7 @@ async fn project_handler(
     Path(project_id): Path<String>,
 ) -> ApiResult<UseApi<impl IntoApiResponse, Json<ProjectResponse>>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::NOT_FOUND)?;
-    if !can_access_project(&project, user.as_ref()) {
+    if !can_view_project(&project, user.as_ref()) {
         return Err(StatusCode::NOT_FOUND.into());
     }
 
@@ -604,6 +613,7 @@ async fn entities_handler(
                     id: project.id,
                     display_name: project.display_name,
                     public: project.public,
+                    unlisted: project.unlisted,
                 })
                 .collect(),
         });

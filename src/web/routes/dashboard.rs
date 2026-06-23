@@ -1,5 +1,5 @@
 use crate::app::reports::{self, DateRange, Dimension, DimensionFilter, GraphInterval, Metric, ReportStats};
-use crate::utils::validate::{self, can_access_project};
+use crate::utils::validate::{self, can_view_project};
 use crate::web::RouterState;
 use crate::web::session::MaybeAuth;
 use crate::web::webext::{ApiResult, AxumErrExt, http_bail};
@@ -15,7 +15,6 @@ use tokio::task::spawn_blocking;
 
 pub fn router() -> ApiRouter<RouterState> {
     ApiRouter::new()
-        .api_route("/config", get(config_handler))
         .api_route("/project/{project_id}/earliest", get(project_earliest_handler))
         .api_route("/project/{project_id}/graph", post(project_graph_handler))
         .api_route("/project/{project_id}/stats", post(project_stats_handler))
@@ -75,22 +74,6 @@ struct DimensionTableRow {
     icon: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ConfigResponse {
-    disable_favicons: bool,
-    oidc_enabled: bool,
-    oidc_button_label: Option<String>,
-}
-
-async fn config_handler(State(app): State<RouterState>) -> ApiResult<Json<ConfigResponse>> {
-    Ok(Json(ConfigResponse {
-        disable_favicons: app.config.disable_favicons,
-        oidc_enabled: app.config.oidc.enabled(),
-        oidc_button_label: app.config.oidc.button_label.clone(),
-    }))
-}
-
 #[derive(Serialize, JsonSchema)]
 struct EarliestResponse {
     earliest: Option<DateTime<Utc>>,
@@ -103,7 +86,7 @@ async fn project_earliest_handler(
 ) -> ApiResult<Json<EarliestResponse>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::NOT_FOUND)?;
 
-    if !can_access_project(&project, user.as_ref()) {
+    if !can_view_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 
@@ -122,7 +105,7 @@ async fn project_graph_handler(
 ) -> ApiResult<Json<GraphResponse>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::IM_A_TEAPOT)?;
 
-    if !can_access_project(&project, user.as_ref()) {
+    if !can_view_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 
@@ -165,7 +148,7 @@ async fn project_stats_handler(
     Json(req): Json<StatsRequest>,
 ) -> ApiResult<Json<StatsResponse>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::NOT_FOUND)?;
-    if !can_access_project(&project, user.as_ref()) {
+    if !can_view_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 
@@ -216,7 +199,7 @@ async fn project_detailed_handler(
 ) -> ApiResult<Json<DimensionResponse>> {
     let project = app.projects.get(&project_id).http_status(StatusCode::NOT_FOUND)?;
 
-    if !can_access_project(&project, user.as_ref()) {
+    if !can_view_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 

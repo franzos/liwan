@@ -266,6 +266,7 @@ mod tests {
             track_geo: GeoDetail::City,
             data_retention: DataRetention::All,
             ingest_drop_rules: Vec::new(),
+            allowed_hostnames: Vec::new(),
         }
     }
 

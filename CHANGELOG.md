@@ -15,8 +15,25 @@ The format is roughly based on the output of `git-cliff` and this project adhere
 
 Since this is not a library, this changelog focuses on the changes that are relevant to the end-users. For a detailed list of changes, see the commit history, which adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). New releases are created automatically when a new tag is pushed (Commit message: chore(release): vX.X.X).
 
-This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync. The base is upstream `main`, which at the time of forking sat several commits past the upstream `v1.5.0` tag — only the entries below are this fork's own changes; everything else comes from upstream.
+This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.6.0-fork.1`); `N` resets to 1 on each upstream sync. Each `-fork.N` entry lists only the fork's own changes on top of that upstream base; everything else comes from the corresponding upstream release, documented further below.
 -->
+
+## [v1.6.0-fork.1] - 2026-06-23
+
+Synced the fork onto upstream's official `v1.6.0` release. The fork's own features — OIDC single sign-on (with sign-up restrictions and ASCII username handling), Matomo import, the custom-events dimension, and the entity dimension — all carry forward unchanged.
+
+### Features
+
+New in this release, inherited from upstream `v1.6.0`:
+
+- Unlisted project visibility
+- Per-entity allowed-hostname restrictions
+- Tracking snippets now use the configured `base_url` instead of the current browser origin
+
+### Other
+
+- Updated to the latest version of DuckDB (1.5.4)
+- Fixed crawler user-agent filtering and dimension-table ordering
 
 ## [v1.5.0-fork.6] - 2026-06-23
 
@@ -75,6 +92,29 @@ These come from upstream `main` past the `v1.5.0` tag and ship in this fork's bu
 - Fixed bounce rate deltas so lower bounce rates show as an improvement
 - Fixed the account settings form to avoid React form action runtime errors
 - Documentation for collected data, collection settings, cookie banners, and projects/entities, plus general docs-site updates
+
+## [v1.6.0] - 2026-06-20
+
+### Features
+
+- Added global and per-entity collection settings for visitor grouping, geolocation detail, session metrics, UTM parameters, and data retention
+- Added ingest drop rules to discard matching events before they are stored
+- Added project display settings to show or hide metrics and dimensions per project
+- Added unlisted project visibility
+- Added a pruning tool to apply retention and collection settings to historical data
+
+### Bug Fixes
+
+- Fixed bounce rate deltas so lower bounce rates show as an improvement
+- Fixed the account settings form to avoid React form action runtime errors
+- Fixed some crawler user-agents that were not being filtered out correctly
+- Tracking snippets now use the configured `base_url` instead of the current browser origin
+
+### Other
+
+- Renamed the internal `visitor_id` event column to `visitor_group_id` to better describe how repeat visits are grouped
+- Existing installs are migrated automatically with collection settings that preserve the previous default behavior
+- Updated to the latest version of DuckDB (1.5.4)
 
 ## [v1.5.0] - 2026-06-15
 

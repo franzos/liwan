@@ -1,6 +1,6 @@
 [package]
 name="liwan"
-version="1.5.0-fork.6"
+version="1.6.0-fork.1"
 edition="2024"
 rust-version="1.95"
 repository="https://github.com/explodingcamera/liwan"
@@ -67,10 +67,11 @@ axum-extra={version="0.12", default-features=false, features=["cookie", "typed-h
 http="1.4"
 headers="0.4"
 tower={version="0.5", default-features=false}
-tower-http={version="0.6", default-features=false, features=[
+tower-http={version="0.7", default-features=false, features=[
     "cors",
     "compression-zstd",
     "set-header",
+    "timeout",
 ]}
 tower_governor={version="0.8", default-features=false, features=["axum"]}
 aide={version="0.16.0-alpha.4", default-features=false, features=[
@@ -89,7 +90,7 @@ openidconnect={version="4", default-features=false, features=["reqwest", "rustls
 ipnet="2.12"
 
 # database
-duckdb={version="1.10503", features=["chrono", "bundled", "r2d2"]}
+duckdb={version="1.10504", features=["chrono", "bundled", "r2d2"]}
 rusqlite={version="0.40", features=["bundled", "modern_sqlite", "chrono"]}
 r2d2={version="0.8", default-features=false}
 refinery={version="0.9", default-features=false}

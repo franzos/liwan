@@ -240,6 +240,7 @@ mod tests {
             track_geo: crate::app::models::GeoDetail::City,
             data_retention,
             ingest_drop_rules,
+            allowed_hostnames: Vec::new(),
         }
     }
 

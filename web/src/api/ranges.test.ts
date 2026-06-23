@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { differenceInCalendarDays, endOfDay, startOfDay, subDays } from "date-fns";
+import { differenceInCalendarDays, endOfDay, startOfDay, startOfMonth, subDays, subMonths } from "date-fns";
 
 import { DateRange, ranges } from "./ranges";
 
@@ -25,6 +25,13 @@ describe("DateRange", () => {
 		const serialized = range.serialize();
 		const deserialized = DateRange.deserialize(serialized);
 		expect(deserialized.value).toEqual({ start, end });
+	});
+
+	it("should persist named ranges dynamically but cache by resolved dates", () => {
+		const range = new DateRange("last30Days");
+
+		expect(range.serialize()).toBe("last30Days");
+		expect(range.cacheKey()).toContain("last30Days:");
 	});
 
 	it("should format well-known ranges", () => {
@@ -83,6 +90,24 @@ describe("DateRange", () => {
 		expect(new DateRange("last7DaysHourly").getGraphInterval()).toBe("hour");
 	});
 
+	it("should keep last12Months to the current month and never future months", () => {
+		const now = new Date();
+		const { start, end } = ranges.last12Months().range;
+
+		expect(start).toEqual(startOfMonth(subMonths(now, 11)));
+		expect(end).toEqual(endOfDay(now));
+	});
+
+	it("should include years on axis and tooltip labels for ranges spanning calendar years", () => {
+		const range = new DateRange({
+			start: new Date(2024, 11, 30),
+			end: new Date(2025, 0, 2),
+		});
+
+		expect(range.getAxisRange()).toBe("day+year");
+		expect(range.getTooltipRange()).toBe("day+hour");
+	});
+
 	it("should start weekToDate on monday and end today", () => {
 		const { start, end } = ranges.weekToDate().range;
 
@@ -101,11 +126,17 @@ describe("DateRange", () => {
 	});
 
 	it("should use variant-specific hourly cutovers for week and month to date", () => {
-		const weekShort = new DateRange({ start: startOfDay(new Date(2024, 10, 1)), end: endOfDay(new Date(2024, 10, 3)) });
+		const weekShort = new DateRange({
+			start: startOfDay(new Date(2024, 10, 1)),
+			end: endOfDay(new Date(2024, 10, 3)),
+		});
 		weekShort.variant = "weekToDate";
 		expect(weekShort.getGraphInterval()).toBe("hour");
 
-		const weekLong = new DateRange({ start: startOfDay(new Date(2024, 10, 1)), end: endOfDay(new Date(2024, 10, 4)) });
+		const weekLong = new DateRange({
+			start: startOfDay(new Date(2024, 10, 1)),
+			end: endOfDay(new Date(2024, 10, 4)),
+		});
 		weekLong.variant = "weekToDate";
 		expect(weekLong.getGraphInterval()).toBe("day");
 
@@ -116,7 +147,10 @@ describe("DateRange", () => {
 		monthShort.variant = "monthToDate";
 		expect(monthShort.getGraphInterval()).toBe("hour");
 
-		const monthLong = new DateRange({ start: startOfDay(new Date(2024, 10, 1)), end: endOfDay(new Date(2024, 10, 7)) });
+		const monthLong = new DateRange({
+			start: startOfDay(new Date(2024, 10, 1)),
+			end: endOfDay(new Date(2024, 10, 7)),
+		});
 		monthLong.variant = "monthToDate";
 		expect(monthLong.getGraphInterval()).toBe("day");
 	});

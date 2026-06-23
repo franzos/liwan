@@ -1,4 +1,6 @@
-use crate::app::models::{GeoDetail, ResolvedCollectionSettings, VisitorGroupMode};
+use crate::app::models::{
+    FilterType, GeoDetail, IngestDropRule, IngestFilter, ResolvedCollectionSettings, VisitorGroupMode, hostname_allowed,
+};
 use crate::app::{Liwan, models::Event};
 use crate::utils::hash::{visitor_group_id, visitor_group_id_cidr, visitor_group_id_fallback};
 use crate::utils::ingest::{Utm, clean_referrer, extract_utm, normalize_url};
@@ -142,6 +144,14 @@ fn process_event(
     }
 
     let settings = app.settings.resolved_for_entity(&event.entity_id);
+    let fqdn = url.host_str().unwrap_or_default().to_string();
+    if !hostname_allowed(&fqdn, &settings.allowed_hostnames) {
+        return Ok(None);
+    }
+
+    if useragent::is_crawler_header(user_agent.as_str()) {
+        return Ok(None);
+    }
 
     // we delay the user agent parsing as much as possible since it's by far the most expensive operation
     let client = useragent::parse(user_agent.as_str());

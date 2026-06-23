@@ -1,7 +1,7 @@
 import path from "node:path";
 import react from "@astrojs/react";
 import type { AstroIntegration } from "astro";
-import { defineConfig } from "astro/config";
+import { defineConfig, fontProviders } from "astro/config";
 import license from "rollup-plugin-license";
 
 const dirname = path.dirname(new URL(import.meta.url).pathname);
@@ -27,7 +27,8 @@ function setPrerender(): AstroIntegration {
 					isDev &&
 					(route.component.endsWith("/pages/p/[...project].astro") ||
 						route.component.endsWith("/pages/settings/projects/[projectId].astro") ||
-						route.component.endsWith("/pages/settings/entities/[entityId].astro"))
+						route.component.endsWith("/pages/settings/entities/[entityId].astro") ||
+						route.component.endsWith("/pages/settings/users/[username].astro"))
 				) {
 					route.prerender = false;
 				}
@@ -38,6 +39,16 @@ function setPrerender(): AstroIntegration {
 
 // https://astro.build/config
 export default defineConfig({
+	fonts: [
+		{
+			provider: fontProviders.fontsource(),
+			name: "Stack Sans Headline",
+			cssVariable: "--font-stack-sans-headline",
+			weights: ["200 700"],
+			styles: ["normal"],
+			subsets: ["latin", "latin-ext"],
+		},
+	],
 	vite: {
 		server: { proxy },
 		preview: { proxy },
@@ -50,8 +61,7 @@ export default defineConfig({
 						template: (dependencies) => JSON.stringify(dependencies),
 					},
 				},
-				// biome-ignore lint/suspicious/noExplicitAny: wrong type
-			}) as any,
+			}),
 		],
 	},
 	integrations: [

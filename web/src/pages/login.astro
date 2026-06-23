@@ -1,6 +1,6 @@
 ---
-import ThemeSwitcher from "../components/ThemeSwitcher.astro";
-import Layout from "../layouts/Base.astro";
+import ThemeSwitcher from "@/components/ui/theme-switcher.astro";
+import Layout from "@/layouts/base.astro";
 ---
 
 <Layout title="Login" noSwitcher>
@@ -44,8 +44,9 @@ import Layout from "../layouts/Base.astro";
 </Layout>
 
 <script>
-  import { api } from "../api/client";
-  import { queryClient } from "../api/query";
+  import { api } from "@/api/client";
+  import { queryClient } from "@/api/query";
+  import { runtimeConfig } from "@/config";
 
   document.addEventListener("astro:page-load", () => {
     const form = document.getElementById("login-form") as HTMLFormElement;
@@ -66,17 +67,13 @@ import Layout from "../layouts/Base.astro";
     }
 
     // Reveal the SSO button when the backend reports OIDC is enabled.
-    api["/api/dashboard/config"]
-      .get()
-      .json()
-      .then((cfg: { oidcEnabled?: boolean; oidcButtonLabel?: string | null }) => {
-        if (!cfg?.oidcEnabled) return;
-        const sso = document.getElementById("sso");
-        const link = document.getElementById("sso-link");
-        if (link && cfg.oidcButtonLabel) link.textContent = cfg.oidcButtonLabel;
-        sso?.removeAttribute("hidden");
-      })
-      .catch(() => {});
+    if (runtimeConfig?.oidcEnabled) {
+      const sso = document.getElementById("sso");
+      const link = document.getElementById("sso-link");
+      if (link && runtimeConfig.oidcButtonLabel)
+        link.textContent = runtimeConfig.oidcButtonLabel;
+      sso?.removeAttribute("hidden");
+    }
 
     if (!form || !alert) return;
 

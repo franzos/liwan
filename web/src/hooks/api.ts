@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { api } from "../api/client";
-import { queryClient, useQuery } from "../api/query";
-import type { DateRange } from "../api/ranges";
-import { toDataPoints } from "../components/graph";
-import type { Dimension, DimensionFilter, DimensionTableRow, Metric, ProjectResponse } from "../constants";
+import { api } from "@/api/client";
+import { queryClient, useQuery } from "@/api/query";
+import type { DateRange } from "@/api/ranges";
+import type { Dimension, DimensionFilter, DimensionTableRow, Metric, ProjectResponse } from "@/constants";
+import { toDataPoints } from "../components/dashboard/project/graph";
 
 const getStatusCode = (error: unknown) => (error as { status?: number } | undefined)?.status;
+
 export const useMe = () => {
 	const { data, isLoading, error } = useQuery({
 		queryKey: ["me"],
@@ -22,16 +23,12 @@ export const useMe = () => {
 	}, []);
 
 	const authError = getStatusCode(error) === 401;
-	return { role: data?.role, username: data?.username, isLoading: isLoading || !mounted, authError };
-};
-
-export const useConfig = () => {
-	const { data, isLoading } = useQuery({
-		queryKey: ["config"],
-		refetchOnMount: false,
-		queryFn: () => api["/api/dashboard/config"].get().json(),
-	});
-	return { config: data, isLoading };
+	return {
+		role: data?.role,
+		username: data?.username,
+		isLoading: isLoading || !mounted,
+		authError,
+	};
 };
 
 export const useProjects = () => {
@@ -51,7 +48,12 @@ export const useProject = (projectId?: string) => {
 			api["/api/dashboard/project/{project_id}"].get({ params: { project_id: projectId as string } }).json(),
 	});
 
-	return { project: data, isLoading, error, notFound: getStatusCode(error) === 404 };
+	return {
+		project: data,
+		isLoading,
+		error,
+		notFound: getStatusCode(error) === 404,
+	};
 };
 
 export const useEntities = () => {
@@ -123,9 +125,12 @@ export const useDimension = ({
 
 	return useMemo(() => {
 		const biggest = data?.data?.reduce((acc, d) => Math.max(acc, d.value), 0) ?? 0;
-		const order = data?.data?.sort((a, b) => b.value - a.value).map((d) => d.dimensionValue);
-		return { data: data?.data, biggest, order, isLoading, error };
-	}, [data, isLoading, error]);
+		const sortedData = data?.data?.toSorted((a, b) =>
+			metric === "bounce_rate" ? a.value - b.value : b.value - a.value,
+		);
+		const order = sortedData?.map((d) => d.dimensionValue);
+		return { data: sortedData, biggest, order, isLoading, error };
+	}, [data, isLoading, error, metric]);
 };
 export const useProjectGraph = ({
 	projectId,
@@ -211,7 +216,10 @@ export const useProjectStats = ({
 		enabled: projectId !== undefined && enabled,
 		queryFn: () =>
 			api["/api/dashboard/project/{project_id}/stats"]
-				.post({ json: { range: range.toAPI(), filters }, params: { project_id: projectId ?? "" } })
+				.post({
+					json: { range: range.toAPI(), filters },
+					params: { project_id: projectId ?? "" },
+				})
 				.json()
 				.then((req) => {
 					if (typeof req === "string") {

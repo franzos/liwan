@@ -76,6 +76,7 @@ export const visitorGroupModes = [
 
 export const geoDetails = ["none", "country", "city"] as const satisfies readonly GeoDetail[];
 
+export const ingestDimensions = ["event", ...dimensions.filter((d) => d !== "event")] as const satisfies readonly Dimension[];
 
 export const metricNames: Record<Metric, string> = {
 	views: "Total Views",
