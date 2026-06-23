@@ -50,6 +50,14 @@
   }
 }
 
+.eventsCard {
+  grid-column: span 2;
+
+  @media (max-width: 40rem) {
+    grid-column: span 1;
+  }
+}
+
 .graphCard {
   height: 20rem;
   margin-top: -0.2rem;

@@ -9,7 +9,7 @@ import { dimensions, metricNames, metrics } from "../constants";
 import { useDimension, useProject, useProjectGraph, useProjectStats } from "../hooks/api";
 import { useMetric, useRange } from "../hooks/persist";
 import { cls } from "../utils";
-import { DimensionDropdownCard, DimensionTabs, DimensionTabsCard, PageDimensionTabsCard } from "./dimensions";
+import { DimensionDropdownCard, DimensionTable, DimensionTabs, DimensionTabsCard, PageDimensionTabsCard } from "./dimensions";
 import { LineGraph } from "./graph";
 import { SelectFilters } from "./project/filter";
 import { SelectEntity } from "./project/entity";
@@ -69,9 +69,27 @@ export const Project = () => {
 	}, []);
 
 	const { project, notFound } = useProject(projectId);
+	// The event scope rides in the filters as a non-pageview `event = X` equality filter.
+	// When `event` is hidden via display settings it's stripped from `visibleFilters` (so reports
+	// revert to pageview); ignore the scope here too, otherwise metric-hiding would desync.
+	const eventHidden = project?.hiddenDimensions.includes("event") ?? false;
+	const eventScope = useMemo(
+		() =>
+			eventHidden
+				? undefined
+				: (filters.find((f) => f.dimension === "event" && f.filterType === "equal" && f.value && f.value !== "pageview")
+						?.value ?? undefined),
+		[filters, eventHidden],
+	);
+	const sessionMetricsHidden = Boolean(eventScope);
 	const visibleMetrics: Metric[] = useMemo(
-		() => metrics.filter((item) => !project?.hiddenMetrics.includes(item)),
-		[project?.hiddenMetrics],
+		() =>
+			metrics.filter(
+				(item) =>
+					!project?.hiddenMetrics.includes(item) &&
+					!(sessionMetricsHidden && (item === "bounce_rate" || item === "avg_time_on_site")),
+			),
+		[project?.hiddenMetrics, sessionMetricsHidden],
 	);
 	const activeMetric = visibleMetrics.includes(metric) ? metric : visibleMetrics[0];
 	const reportMetric: Metric = activeMetric ?? "views";
@@ -144,6 +162,18 @@ export const Project = () => {
 
 	const onSelectDimRow = useCallback(
 		(value: DimensionTableRow, dimension: Dimension) => {
+			// The event scope is single-select: clicking a different event switches scope, clicking the active one clears it.
+			if (dimension === "event") {
+				// Build the filter directly — `getDimensionFilter` special-cases "Unknown" into an is_null
+				// filter, which would break the event scope for an event literally named "Unknown".
+				const eventFilter: DimensionFilter = { dimension: "event", filterType: "equal", value: value.dimensionValue };
+				setFilters((prev) => {
+					const active = prev.find((f) => f.dimension === "event" && f.value === value.dimensionValue);
+					const rest = prev.filter((f) => f.dimension !== "event");
+					return active ? rest : [...rest, eventFilter];
+				});
+				return;
+			}
 			toggleFilter(getDimensionFilter(dimension, value.dimensionValue));
 		},
 		[toggleFilter],
@@ -228,9 +258,38 @@ export const Project = () => {
 					{activeMetric && deviceDimensions.length > 0 && (
 						<DimensionDropdownCard dimensions={deviceDimensions} query={query} onSelect={onSelectDimRow} />
 					)}
+					{activeMetric && !project.hiddenDimensions.includes("event") && (
+						<EventsCard query={query} onSelect={onSelectDimRow} />
+					)}
 				</div>
 			</Suspense>
 		</div>
+	);
+};
+
+const EventsCard = ({
+	query,
+	onSelect,
+}: {
+	query: ProjectQuery;
+	onSelect: (value: DimensionTableRow, dimension: Dimension) => void;
+}) => {
+	// Session metrics aren't meaningful per custom event, so the card always reports a count metric.
+	const eventMetric: Metric =
+		query.metric === "bounce_rate" || query.metric === "avg_time_on_site" ? "views" : query.metric;
+	const eventQuery = useMemo(() => ({ ...query, metric: eventMetric }), [query, eventMetric]);
+	const { data, isLoading } = useDimension({ dimension: "event", ...eventQuery });
+	// Keep the card mounted while loading so the grid doesn't jump; only hide it for projects with no custom events.
+	if (!isLoading && (data?.length ?? 0) === 0) return null;
+
+	return (
+		<article className={cls(cardStyles.card, styles.eventsCard)} data-full-width="true">
+			<div className={cardStyles.dimensionHeader}>
+				<div>Events</div>
+				<div>{metricNames[eventMetric]}</div>
+			</div>
+			<DimensionTable dimension="event" query={eventQuery} onSelect={(value) => onSelect(value, "event")} />
+		</article>
 	);
 };
 

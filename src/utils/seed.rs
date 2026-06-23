@@ -136,6 +136,47 @@ pub fn random_events(
     })
 }
 
+pub fn random_custom_events(
+    time_range: (DateTime<Utc>, DateTime<Utc>),
+    entity_id: &str,
+    fqdn: &str,
+    name: &str,
+    count: usize,
+) -> impl Iterator<Item = Event> {
+    // Deterministic count — test fixtures depend on it. The lognormal sampler in
+    // `random_events` can undershoot its target for small counts, so generate exactly
+    // `count` events evenly spread across the range instead.
+    let (start, end) = time_range;
+    let span = (end - start).num_seconds().max(1);
+    let entity_id = entity_id.to_string();
+    let fqdn = fqdn.to_string();
+    let name = name.to_string();
+    let mut rng = rand::rng();
+    let visitors: Vec<String> = (0..(count / 5).max(1)).map(|_| rng.random::<u64>().to_string()).collect();
+    (0..count).map(move |i| Event {
+        browser: None,
+        city: None,
+        country: None,
+        created_at: start + Duration::seconds(span * i as i64 / count.max(1) as i64),
+        entity_id: entity_id.clone(),
+        event: name.clone(),
+        fqdn: Some(fqdn.clone()),
+        mobile: Some(false),
+        platform: None,
+        referrer: None,
+        path: Some("/".to_string()),
+        visitor_group_id: visitors[i % visitors.len()].clone(),
+        utm_campaign: Some(String::new()),
+        utm_content: Some(String::new()),
+        utm_medium: Some(String::new()),
+        utm_source: Some(String::new()),
+        utm_term: Some(String::new()),
+        screen_width: Some("md".to_string()),
+        orientation: Some("landscape".to_string()),
+        track_sessions: true,
+    })
+}
+
 fn random_el<T>(slice: &[T], scale: f64) -> &T {
     let mut rng = rand::rng();
     let len = slice.len();

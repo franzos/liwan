@@ -16,6 +16,28 @@ use std::fmt::{Debug, Display};
 
 pub use crate::app::models::FilterType;
 
+/// Default event scope for dashboard reports.
+pub const DEFAULT_EVENT: &str = "pageview";
+
+/// Split the event scope out of a filter list.
+///
+/// Returns the scoped event name (defaulting to [`DEFAULT_EVENT`]) and the remaining
+/// filters with the event-scope filter removed. An inverted event filter is a genuine
+/// exclusion and is left in place.
+pub fn split_event_scope(filters: &[DimensionFilter]) -> (String, Vec<DimensionFilter>) {
+    let mut event = DEFAULT_EVENT.to_string();
+    let mut rest = Vec::with_capacity(filters.len());
+    for filter in filters {
+        match (&filter.value, filter.dimension, filter.filter_type, filter.inversed) {
+            (Some(value), Dimension::Event, FilterType::Equal, inversed) if inversed != Some(true) => {
+                event = value.clone();
+            }
+            _ => rest.push(filter.clone()),
+        }
+    }
+    (event, rest)
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DateRange {
     /// Start of the report range
@@ -131,6 +153,8 @@ pub enum Dimension {
     Orientation,
     /// Tracked entity
     EntityId,
+    /// Custom event name
+    Event,
 }
 
 impl Display for Dimension {
@@ -155,6 +179,7 @@ impl Display for Dimension {
             Self::ScreenWidth => "screen_width",
             Self::Orientation => "orientation",
             Self::EntityId => "entity_id",
+            Self::Event => "event",
         })
     }
 }
@@ -181,6 +206,7 @@ impl Dimension {
             Self::UtmTerm,
             Self::ScreenWidth,
             Self::Orientation,
+            Self::Event,
         ]
     }
 }
@@ -224,4 +250,49 @@ pub struct DimensionFilter {
     pub(super) inversed: Option<bool>,
     pub(super) strict: Option<bool>,
     pub(super) value: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event_filter(value: &str) -> DimensionFilter {
+        DimensionFilter {
+            dimension: Dimension::Event,
+            filter_type: FilterType::Equal,
+            inversed: None,
+            strict: None,
+            value: Some(value.to_string()),
+        }
+    }
+
+    #[test]
+    fn split_event_scope_defaults_to_pageview() {
+        let (event, rest) = split_event_scope(&[]);
+        assert_eq!(event, "pageview");
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn split_event_scope_extracts_event_filter() {
+        let other = DimensionFilter {
+            dimension: Dimension::Country,
+            filter_type: FilterType::Equal,
+            inversed: None,
+            strict: None,
+            value: Some("DE".to_string()),
+        };
+        let (event, rest) = split_event_scope(&[event_filter("signup"), other.clone()]);
+        assert_eq!(event, "signup");
+        assert_eq!(rest, vec![other]);
+    }
+
+    #[test]
+    fn split_event_scope_keeps_inverted_event_filter() {
+        let mut inverted = event_filter("signup");
+        inverted.inversed = Some(true);
+        let (event, rest) = split_event_scope(&[inverted.clone()]);
+        assert_eq!(event, "pageview");
+        assert_eq!(rest, vec![inverted]);
+    }
 }

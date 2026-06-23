@@ -100,3 +100,68 @@ async fn test_entity_filter() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_custom_events() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+
+    app.seed_database(200)?;
+
+    let api_prefix = "/api/dashboard/project/public-project";
+    let start = (Utc::now() - Duration::days(365)).to_rfc3339();
+    let end = Utc::now().to_rfc3339();
+
+    // The Events breakdown lists custom events and excludes the implicit pageview scope.
+    let dim = client
+        .post(
+            &format!("{api_prefix}/dimension"),
+            json!({"dimension":"event","filters":[],"metric":"views","range":{"start":start,"end":end}}),
+        )
+        .await;
+    dim.assert_status_success();
+    let body = dim.json::<serde_json::Value>();
+    let names: Vec<String> = body["data"]
+        .as_array()
+        .expect("data array")
+        .iter()
+        .map(|row| row["dimensionValue"].as_str().expect("dimensionValue").to_string())
+        .collect();
+    assert!(names.iter().any(|n| n == "signup"), "expected a signup event, got {names:?}");
+    assert!(!names.iter().any(|n| n == "pageview"), "events card must exclude pageview");
+
+    // Baseline: the default pageview scope reports session metrics, so a NULL below proves scope-driven nulling rather than empty data.
+    let pageview =
+        client.post(&format!("{api_prefix}/stats"), json!({"range":{"start":start,"end":end},"filters":[]})).await;
+    pageview.assert_status_success();
+    assert!(!pageview.json::<serde_json::Value>()["stats"]["bounceRate"].is_null());
+
+    // Scoping stats to a custom event nulls the session metrics.
+    let stats = client
+        .post(
+            &format!("{api_prefix}/stats"),
+            json!({"range":{"start":start,"end":end},"filters":[
+                {"dimension":"event","filterType":"equal","value":"signup"}
+            ]}),
+        )
+        .await;
+    stats.assert_status_success();
+    let body = stats.json::<serde_json::Value>();
+    assert!(body["stats"]["totalViews"].as_u64().expect("totalViews") > 0);
+    assert!(body["stats"]["bounceRate"].is_null());
+    assert!(body["stats"]["avgTimeOnSite"].is_null());
+
+    // Session metrics are rejected under an event scope on the graph endpoint.
+    let graph = client
+        .post(
+            &format!("{api_prefix}/graph"),
+            json!({"range":{"start":start,"end":end},"metric":"bounce_rate","interval":"day","timezone":"UTC","filters":[
+                {"dimension":"event","filterType":"equal","value":"signup"}
+            ]}),
+        )
+        .await;
+    graph.assert_status_bad_request();
+
+    Ok(())
+}

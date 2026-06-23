@@ -6,7 +6,7 @@ use anyhow::Result;
 use duckdb::params_from_iter;
 
 use super::shared::{SESSION_DURATION_SQL, build_filter_clause, metric_aggregate_sql};
-use super::{DateRange, Dimension, DimensionFilter, Metric, ReportTable};
+use super::{DEFAULT_EVENT, DateRange, Dimension, DimensionFilter, Metric, ReportTable};
 
 /// Build a dimension table report for a metric
 pub fn dimension_report(
@@ -53,6 +53,7 @@ pub fn dimension_report(
         Dimension::ScreenWidth => ("screen_width", None),
         Dimension::Orientation => ("orientation", None),
         Dimension::EntityId => ("entity_id", None),
+        Dimension::Event => ("event", None),
     };
     let filters_sql = match (filters_sql.is_empty(), dimension_scope_sql) {
         (true, Some(scope)) => format!("and ({scope})"),
@@ -60,7 +61,14 @@ pub fn dimension_report(
         (_, None) => filters_sql,
     };
 
-    params.push(event);
+    let event_scope_sql = if *dimension == Dimension::Event {
+        // The Events breakdown lists every custom event, so ignore the implicit pageview scope.
+        params.push(DEFAULT_EVENT);
+        "sd.event != ?::text"
+    } else {
+        params.push(event);
+        "sd.event = ?::text"
+    };
     params.push(range.start);
     params.push(range.end);
     params.extend(entities);
@@ -78,7 +86,7 @@ pub fn dimension_report(
 					time_to_next_event
 				from events sd
 				where
-					sd.event = ?::text and
+					{event_scope_sql} and
 					sd.created_at >= ?::timestamp and sd.created_at < ?::timestamp and
 					sd.entity_id in ({entity_vars})
 					{filters_sql}

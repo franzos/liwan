@@ -132,7 +132,13 @@ async fn project_graph_handler(
         http_bail!(StatusCode::BAD_REQUEST, "Metric is hidden for this project")
     }
 
-    reports::validate_entity_filters(&req.filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
+    let (event, filters) = reports::split_event_scope(&req.filters);
+    reports::validate_entity_filters(&filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
+
+    // Session metrics span all of a visitor's events, so they're meaningless under a custom-event scope.
+    if event != reports::DEFAULT_EVENT && matches!(req.metric, Metric::BounceRate | Metric::AvgTimeOnSite) {
+        http_bail!(StatusCode::BAD_REQUEST, "Metric not available for custom events")
+    }
 
     let conn = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
     let buckets = reports::build_graph_buckets(&req.range, req.interval, req.timezone.as_deref())
@@ -143,7 +149,7 @@ async fn project_graph_handler(
     }
 
     let report = spawn_blocking(move || {
-        reports::overall_report(&conn, &entities, "pageview", &req.range, &buckets, &req.filters, &req.metric)
+        reports::overall_report(&conn, &entities, &event, &req.range, &buckets, &filters, &req.metric)
     })
     .await
     .http_status(StatusCode::INTERNAL_SERVER_ERROR)?
@@ -164,19 +170,21 @@ async fn project_stats_handler(
     }
 
     let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
-    reports::validate_entity_filters(&req.filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
+    let (event, filters) = reports::split_event_scope(&req.filters);
+    reports::validate_entity_filters(&filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
     let (entities2, entities3) = (entities.clone(), entities.clone());
 
     let conn = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let req2 = req.clone();
     let conn2 = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let event_scoped = event != reports::DEFAULT_EVENT;
+    let range = req.range.clone();
+    let range_prev = req.range.prev();
+    let (event2, filters2) = (event.clone(), filters.clone());
+
     let (stats, stats_prev) = tokio::try_join!(
-        spawn_blocking(move || { reports::overall_stats(&conn, &entities, "pageview", &req.range, &req.filters) }),
-        spawn_blocking(move || {
-            reports::overall_stats(&conn2, &entities2, "pageview", &req2.range.prev(), &req2.filters)
-        })
+        spawn_blocking(move || { reports::overall_stats(&conn, &entities, &event, &range, &filters) }),
+        spawn_blocking(move || { reports::overall_stats(&conn2, &entities2, &event2, &range_prev, &filters2) })
     )
     .http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -185,11 +193,11 @@ async fn project_stats_handler(
         stats_prev.http_status(StatusCode::INTERNAL_SERVER_ERROR)?,
     );
 
-    if app.is_metric_hidden(&project.id, &entities3, Metric::BounceRate) {
+    if event_scoped || app.is_metric_hidden(&project.id, &entities3, Metric::BounceRate) {
         stats.bounce_rate = None;
         stats_prev.bounce_rate = None;
     }
-    if app.is_metric_hidden(&project.id, &entities3, Metric::AvgTimeOnSite) {
+    if event_scoped || app.is_metric_hidden(&project.id, &entities3, Metric::AvgTimeOnSite) {
         stats.avg_time_on_site = None;
         stats_prev.avg_time_on_site = None;
     }
@@ -221,12 +229,13 @@ async fn project_detailed_handler(
         http_bail!(StatusCode::BAD_REQUEST, "Dimension is hidden for this project")
     }
 
-    reports::validate_entity_filters(&req.filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
+    let (event, filters) = reports::split_event_scope(&req.filters);
+    reports::validate_entity_filters(&filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
 
     let conn = app.events_conn().http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let stats = spawn_blocking(move || {
-        reports::dimension_report(&conn, &entities, "pageview", &req.range, &req.dimension, &req.filters, &req.metric)
+        reports::dimension_report(&conn, &entities, &event, &req.range, &req.dimension, &filters, &req.metric)
     })
     .await
     .http_status(StatusCode::INTERNAL_SERVER_ERROR)?

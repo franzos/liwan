@@ -18,6 +18,14 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.5.0-fork.1`); `N` resets to 1 on each upstream sync. The base is upstream `main`, which at the time of forking sat several commits past the upstream `v1.5.0` tag — only the entries below are this fork's own changes; everything else comes from upstream.
 -->
 
+## [v1.5.0-fork.6] - 2026-06-23
+
+### Features
+
+- Custom events on the project dashboard: an Events card lists tracked event names; click one to scope all reports to that event
+- Event as a first-class dimension you can toggle from display settings
+- Matomo import: retry on rate limits with configurable backoff
+
 ## [v1.5.0-fork.5] - 2026-06-18
 
 ### Features

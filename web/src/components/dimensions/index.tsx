@@ -2,7 +2,7 @@ import styles from "./dimensions.module.css";
 
 import { useEffect, useState } from "react";
 import { Tabs } from "@base-ui/react/tabs";
-import { LinkIcon, MonitorIcon, PinIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { LinkIcon, MonitorIcon, PinIcon, SquareArrowOutUpRightIcon, ZapIcon } from "lucide-react";
 
 import type { Dimension, DimensionTableRow } from "../../constants";
 import { dimensionNames, metricNames } from "../../constants";
@@ -280,6 +280,12 @@ const dimensionLabels: Record<Dimension, (value: DimensionTableRow, onSelect: ()
 	},
 	entity_id: (value, onSelect) => (
 		<DimensionValueButton onSelect={onSelect}>{value.displayName || value.dimensionValue}</DimensionValueButton>
+	),
+	event: (value, onSelect) => (
+		<>
+			<ZapIcon size={20} />
+			<DimensionValueButton onSelect={onSelect}>{value.dimensionValue}</DimensionValueButton>
+		</>
 	),
 	mobile: (value, onSelect) => (
 		<>

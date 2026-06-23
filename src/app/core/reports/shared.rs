@@ -100,6 +100,7 @@ pub(super) fn build_filter_clause(filters: &[DimensionFilter]) -> Result<(String
 				Dimension::ScreenWidth => format!("screen_width {filter_value}"),
 				Dimension::Orientation => format!("orientation {filter_value}"),
 				Dimension::EntityId => format!("entity_id {filter_value}"),
+				Dimension::Event => format!("event {filter_value}"),
 			})
 		})
 		.collect::<Result<Vec<String>>>()?;

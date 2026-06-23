@@ -235,6 +235,20 @@ impl Liwan {
             let events = crate::utils::seed::random_events((start, end), entity_id, fqdn, count_per_entity);
             let now = std::time::Instant::now();
             self.events.append(events)?;
+
+            // Seed a couple of custom events so the Events card has data in dev/tests.
+            if entity_id == "entity-1" {
+                for name in ["signup", "scroll-50%"] {
+                    let custom = crate::utils::seed::random_custom_events(
+                        (start, end),
+                        entity_id,
+                        fqdn,
+                        name,
+                        count_per_entity / 10,
+                    );
+                    self.events.append(custom)?;
+                }
+            }
             tracing::info!("Seeded entity {} in {:?}", entity_id, now.elapsed());
         }
 

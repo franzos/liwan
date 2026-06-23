@@ -44,6 +44,7 @@ export const dimensions = [
 	"utm_term",
 	"screen_width",
 	"orientation",
+	"event",
 ] as const satisfies Dimension[];
 
 export const filterTypes = [
@@ -75,7 +76,6 @@ export const visitorGroupModes = [
 
 export const geoDetails = ["none", "country", "city"] as const satisfies readonly GeoDetail[];
 
-export const ingestDimensions = ["event", ...dimensions] as const;
 
 export const metricNames: Record<Metric, string> = {
 	views: "Total Views",
@@ -104,6 +104,7 @@ export const dimensionNames: Record<Dimension, string> = {
 	screen_width: "Screen Width",
 	orientation: "Orientation",
 	entity_id: "Entity",
+	event: "Event",
 };
 
 export const filterNames: Record<DimensionFilter["filterType"], string> = {

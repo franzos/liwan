@@ -11,7 +11,7 @@ import type {
 	IngestFilter,
 	VisitorGroupMode,
 } from "../../constants";
-import { geoDetails, ingestDimensions, visitorGroupModes } from "../../constants";
+import { dimensions, geoDetails, visitorGroupModes } from "../../constants";
 import { Dialog } from "../dialog";
 import type { FilterOption, GenericFilter } from "../project/filter";
 import { FilterDialog, filterOptions } from "../project/filter";
@@ -176,7 +176,7 @@ export const FiltersEditor = ({
 								<FilterDialog
 									buttonText="Add filter"
 									buttonIcon={null}
-									dimensions={[...ingestDimensions]}
+									dimensions={[...dimensions]}
 									options={ingestFilterOptions}
 									allowInverted={false}
 									onAdd={(filter: GenericFilter) => {
