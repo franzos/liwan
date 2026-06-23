@@ -1,6 +1,4 @@
-use crate::app::models::{
-    FilterType, GeoDetail, IngestDropRule, IngestFilter, ResolvedCollectionSettings, VisitorGroupMode, hostname_allowed,
-};
+use crate::app::models::{GeoDetail, ResolvedCollectionSettings, VisitorGroupMode, hostname_allowed};
 use crate::app::{Liwan, models::Event};
 use crate::utils::hash::{visitor_group_id, visitor_group_id_cidr, visitor_group_id_fallback};
 use crate::utils::ingest::{Utm, clean_referrer, extract_utm, normalize_url};
