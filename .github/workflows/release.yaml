@@ -21,6 +21,12 @@ jobs:
           draft: false # has to be public to have the right url's for the docker image
           prefix: liwan
           token: ${{ secrets.GITHUB_TOKEN }}
+      # The `-fork.N` suffix is a semver pre-release, so the action above flags the
+      # release as a pre-release. Promote it to a full, latest release.
+      - name: Promote to full release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --prerelease=false --latest
 
   build-web:
     runs-on: ubuntu-24.04
