@@ -156,10 +156,13 @@ Do expect the numbers to differ from Matomo's own, and from live liwan tracking:
 - Only pageviews are imported; downloads, events, and goals between pageviews are dropped, which skews bounce rate and time-on-site (bounce rate generally higher).
 - Time-on-site isn't comparable to Matomo's: liwan averages the gap between consecutive pageviews (single-page sessions excluded), while Matomo divides total visit length by all visits (bounces counted as zero). On bounce-heavy sites liwan's figure reads much higher. This is how liwan computes the metric for live data too, not an import artifact.
 - Bot filtering is Matomo's, not liwan's. Device and OS mapping is best-effort. City names can differ between GeoIP databases.
+- Imported visitor ids are derived from the persistent id Matomo assigned and don't rotate daily like live ones. A visitor who came back over a week is one unique visitor across an imported range, but up to seven across a live one, so multi-day unique counts read lower for imported periods.
 
 ## Fork
 
 This is a fork of [explodingcamera/liwan](https://github.com/explodingcamera/liwan), adding support for an OIDC/OAuth login flow.
+
+The fork adds its own database migration, numbered in the same sequence as upstream's. Upstream migrations added after the fork point are renumbered on each sync, so a data directory created by an upstream release won't start on the fork: refinery sees a divergent migration history and refuses. Start from an empty data directory, or stay on upstream.
 
 ## License
 
