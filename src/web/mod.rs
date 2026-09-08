@@ -94,11 +94,11 @@ pub fn router(app: Arc<Liwan>, events: Sender<Event>) -> Result<(axum::Router<()
 
     let dashboard = ApiRouter::new()
         .merge(routes::admin::router())
-        .merge(routes::auth::router())
+        .merge(routes::auth::router(&app.config))
         .merge(routes::dashboard::router());
 
     let router = ApiRouter::new()
-        .nest("/api", routes::event::router().layer(event_cors))
+        .nest("/api", routes::event::router(&app.config).layer(event_cors))
         .nest("/api/dashboard", dashboard)
         .route_service("/script.js", StaticFile::<Script>::new("script.min.js").layer(script_cors).into_service())
         .fallback(axum::routing::get(serve))

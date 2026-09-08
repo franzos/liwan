@@ -1,11 +1,16 @@
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::utils::ip_headers::{parse_header_ip, public_ip, should_trust_forwarded_headers};
+use crate::config::Config;
+use crate::utils::ip_headers::{
+    TrustedHeader, TrustedProxy, parse_header_ip, public_ip, should_trust_forwarded_headers,
+    should_trust_forwarded_headers_for_rate_limit,
+};
 use crate::web::Files;
 use crate::web::RouterState;
 use aide::axum::IntoApiResponse;
@@ -20,6 +25,8 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::json;
 use tower::Service;
+use tower_governor::errors::GovernorError;
+use tower_governor::key_extractor::KeyExtractor;
 
 pub type ApiResult<T, E = ApiError> = Result<T, E>;
 
@@ -280,12 +287,124 @@ impl FromRequestParts<RouterState> for ClientIp {
 
         if should_trust_forwarded_headers(state.config.use_forward_headers, peer_ip, &state.config.trusted_proxies) {
             for header in &state.config.trusted_headers {
-                if let Some(ip) = public_ip(parse_header_ip(parts, header)) {
+                if let Some(ip) = public_ip(parse_header_ip(&parts.headers, header)) {
                     return Ok(ClientIp(Some(ip)));
                 }
             }
         }
 
         Ok(ClientIp(public_ip(peer_ip)))
+    }
+}
+
+/// Rate-limit bucket key: the forwarded client IP behind a listed proxy, the TCP
+/// peer otherwise.
+///
+/// The stock extractors both get this wrong for liwan. `PeerIpKeyExtractor`
+/// collapses every visitor behind a reverse proxy into one bucket, which drops
+/// tracker events; `SmartIpKeyExtractor` trusts forwarded headers from anyone,
+/// so a direct client escapes its bucket by rewriting the header.
+#[derive(Clone)]
+pub struct RateLimitKeyExtractor {
+    use_forward_headers: bool,
+    trusted_proxies: Arc<[TrustedProxy]>,
+    trusted_headers: Arc<[TrustedHeader]>,
+}
+
+/// Bucket for requests that arrive without a peer address — the test harness has
+/// no `ConnectInfo`. Erroring instead would turn every such request into a 500.
+const RATE_LIMIT_FALLBACK_KEY: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+
+impl RateLimitKeyExtractor {
+    pub fn new(config: &Config) -> Self {
+        Self {
+            use_forward_headers: config.use_forward_headers,
+            trusted_proxies: config.trusted_proxies.clone().into(),
+            trusted_headers: config.trusted_headers.clone().into(),
+        }
+    }
+}
+
+impl KeyExtractor for RateLimitKeyExtractor {
+    type Key = IpAddr;
+
+    fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
+        let peer_ip = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(addr)| addr.ip());
+
+        if should_trust_forwarded_headers_for_rate_limit(self.use_forward_headers, peer_ip, &self.trusted_proxies) {
+            for header in self.trusted_headers.iter() {
+                if let Some(ip) = parse_header_ip(req.headers(), header) {
+                    return Ok(ip);
+                }
+            }
+        }
+
+        Ok(peer_ip.unwrap_or(RATE_LIMIT_FALLBACK_KEY))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_proxies(proxies: &[&str]) -> Config {
+        let mut config = Config::default();
+        config.use_forward_headers = true;
+        config.trusted_proxies = proxies.iter().map(|p| p.parse().expect("valid proxy")).collect();
+        config
+    }
+
+    fn request(peer: Option<&str>, headers: &[(&str, &str)]) -> http::Request<()> {
+        let mut builder = http::Request::builder();
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let mut req = builder.body(()).expect("valid request");
+        if let Some(peer) = peer {
+            req.extensions_mut().insert(ConnectInfo(peer.parse::<SocketAddr>().expect("valid peer")));
+        }
+        req
+    }
+
+    #[test]
+    fn falls_back_to_fixed_key_without_connect_info() {
+        let extractor = RateLimitKeyExtractor::new(&config_with_proxies(&["10.0.0.1"]));
+        let key = extractor.extract(&request(None, &[("x-real-ip", "9.9.9.9")])).expect("extraction cannot fail");
+        assert_eq!(key, RATE_LIMIT_FALLBACK_KEY);
+    }
+
+    #[test]
+    fn keys_on_peer_when_proxies_not_trusted() {
+        // An untrusted peer cannot talk its way out of its own bucket.
+        let extractor = RateLimitKeyExtractor::new(&config_with_proxies(&["10.0.0.1"]));
+        let key = extractor
+            .extract(&request(Some("203.0.113.7:44321"), &[("x-real-ip", "9.9.9.9")]))
+            .expect("extraction cannot fail");
+        assert_eq!(key, "203.0.113.7".parse::<IpAddr>().unwrap());
+
+        // An empty proxy list means no forwarded header is trusted.
+        let extractor = RateLimitKeyExtractor::new(&config_with_proxies(&[]));
+        let key = extractor
+            .extract(&request(Some("10.0.0.1:44321"), &[("x-real-ip", "9.9.9.9")]))
+            .expect("extraction cannot fail");
+        assert_eq!(key, "10.0.0.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn keys_on_forwarded_header_when_peer_is_a_trusted_proxy() {
+        let extractor = RateLimitKeyExtractor::new(&config_with_proxies(&["10.0.0.0/8"]));
+        let key = extractor
+            .extract(&request(Some("10.4.5.6:44321"), &[("x-forwarded-for", "9.9.9.9, 8.8.8.8")]))
+            .expect("extraction cannot fail");
+        assert_eq!(key, "8.8.8.8".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn keys_on_private_peer_addresses_too() {
+        // No public_ip filtering: a LAN client gets its own bucket rather than
+        // sharing the fallback with everyone else.
+        let extractor = RateLimitKeyExtractor::new(&config_with_proxies(&[]));
+        let key = extractor.extract(&request(Some("192.168.1.5:1234"), &[])).expect("extraction cannot fail");
+        assert_eq!(key, "192.168.1.5".parse::<IpAddr>().unwrap());
     }
 }

@@ -32,6 +32,9 @@ pub struct Config {
     pub duckdb: DuckdbConfig,
 
     #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+
+    #[serde(default)]
     pub oidc: OidcConfig,
 
     #[serde(default = "default_trusted_headers", deserialize_with = "deserialize_trusted_headers")]
@@ -54,6 +57,7 @@ impl Default for Config {
             data_dir: default_data_dir(),
             geoip: Default::default(),
             duckdb: Default::default(),
+            rate_limit: Default::default(),
             oidc: Default::default(),
             disable_favicons: false,
             listen: None,
@@ -161,6 +165,48 @@ impl OidcConfig {
     pub fn redirect_uri(&self, base_url: &str) -> String {
         format!("{}/api/dashboard/auth/oidc/callback", base_url.trim_end_matches('/'))
     }
+}
+
+/// Per-client rate limits. Both limits are a token bucket: `burst` tokens up
+/// front, one more every `period`. A shared NAT drains one bucket, so the burst
+/// carries normal traffic and the period sets the sustained rate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_auth_period_seconds")]
+    pub auth_period_seconds: u64,
+    #[serde(default = "default_auth_burst")]
+    pub auth_burst: u32,
+    #[serde(default = "default_event_period_ms")]
+    pub event_period_ms: u64,
+    #[serde(default = "default_event_burst")]
+    pub event_burst: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            auth_period_seconds: default_auth_period_seconds(),
+            auth_burst: default_auth_burst(),
+            event_period_ms: default_event_period_ms(),
+            event_burst: default_event_burst(),
+        }
+    }
+}
+
+fn default_auth_period_seconds() -> u64 {
+    2
+}
+
+fn default_auth_burst() -> u32 {
+    5
+}
+
+fn default_event_period_ms() -> u64 {
+    50
+}
+
+fn default_event_burst() -> u32 {
+    100
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -295,6 +341,19 @@ impl Config {
         if config.visitor_group_rotation_hour > 23 {
             bail!("Invalid visitor_group_rotation_hour: must be between 0 and 23");
         }
+        // A zero period or burst is rejected by the governor builder, which would
+        // panic well after boot. Catch it here instead.
+        if config.rate_limit.auth_period_seconds == 0 || config.rate_limit.event_period_ms == 0 {
+            bail!("Invalid rate_limit: auth_period_seconds and event_period_ms must be greater than 0");
+        }
+        if config.rate_limit.auth_burst == 0 || config.rate_limit.event_burst == 0 {
+            bail!("Invalid rate_limit: auth_burst and event_burst must be greater than 0");
+        }
+        if config.use_forward_headers && config.trusted_proxies.is_empty() {
+            tracing::warn!(
+                "use_forward_headers is on but trusted_proxies is empty; the rate limiter keys on the TCP peer, so every client behind a proxy shares one bucket. List your proxies in trusted_proxies."
+            );
+        }
         if config.oidc.registration == OidcRegistration::DomainAllowlist {
             if config.oidc.allowed_domains.is_empty() {
                 bail!("oidc.registration = \"domain_allowlist\" requires a non-empty oidc.allowed_domains");
@@ -325,7 +384,7 @@ impl Config {
 fn map_env_key(key: &str) -> Option<String> {
     let key = key.strip_prefix("LIWAN_")?.to_ascii_lowercase();
     const NESTED_PREFIXES: &[(&str, &str)] =
-        &[("maxmind_", "geoip.maxmind_"), ("duckdb_", "duckdb."), ("oidc_", "oidc.")];
+        &[("maxmind_", "geoip.maxmind_"), ("duckdb_", "duckdb."), ("oidc_", "oidc."), ("rate_limit_", "rate_limit.")];
 
     for (prefix, mapped_prefix) in NESTED_PREFIXES {
         if let Some(rest) = key.strip_prefix(prefix) {
@@ -456,6 +515,30 @@ mod test {
             vec![TrustedProxy::Ip("127.0.0.1".parse().unwrap()), TrustedProxy::Cidr("10.0.0.0/8".parse().unwrap())]
         );
         assert!(config.use_forward_headers);
+    }
+
+    #[test]
+    fn test_rate_limit_defaults_and_env_override() {
+        let config = Config::load(None, Vec::<(String, String)>::new()).expect("failed to load config");
+        assert_eq!(config.rate_limit.auth_period_seconds, 2);
+        assert_eq!(config.rate_limit.auth_burst, 5);
+        assert_eq!(config.rate_limit.event_period_ms, 50);
+        assert_eq!(config.rate_limit.event_burst, 100);
+
+        let config =
+            Config::load(None, vec![("LIWAN_RATE_LIMIT_AUTH_BURST", "3"), ("LIWAN_RATE_LIMIT_EVENT_PERIOD_MS", "10")])
+                .expect("failed to load config");
+        assert_eq!(config.rate_limit.auth_burst, 3);
+        assert_eq!(config.rate_limit.event_period_ms, 10);
+        assert_eq!(config.rate_limit.auth_period_seconds, 2);
+    }
+
+    #[test]
+    fn test_rate_limit_rejects_zero() {
+        assert!(Config::load(None, vec![("LIWAN_RATE_LIMIT_AUTH_BURST", "0")]).is_err());
+        assert!(Config::load(None, vec![("LIWAN_RATE_LIMIT_EVENT_BURST", "0")]).is_err());
+        assert!(Config::load(None, vec![("LIWAN_RATE_LIMIT_AUTH_PERIOD_SECONDS", "0")]).is_err());
+        assert!(Config::load(None, vec![("LIWAN_RATE_LIMIT_EVENT_PERIOD_MS", "0")]).is_err());
     }
 
     #[test]

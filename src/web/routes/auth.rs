@@ -22,6 +22,7 @@ use crate::{
         RegistrationDecision, RejectReason, email_domain, evaluate_registration,
         models::{User, UserRole},
     },
+    config::Config,
     utils::hash::session_token,
     web::{
         MaybeSessionId, RouterState,
@@ -29,12 +30,17 @@ use crate::{
             Auth, LOGOUT_COOKIES, MAX_SESSION_AGE, OIDC_STATE_COOKIE, OIDC_STATE_COOKIE_NAME, PUBLIC_COOKIE,
             SESSION_COOKIE,
         },
-        webext::{ApiResult, AxumErrExt, empty_response, http_bail},
+        webext::{ApiResult, AxumErrExt, RateLimitKeyExtractor, empty_response, http_bail},
     },
 };
 
-pub fn router() -> ApiRouter<RouterState> {
-    let limiter = GovernorConfigBuilder::default().per_second(2).burst_size(5).finish().expect("valid governor config");
+pub fn router(config: &Config) -> ApiRouter<RouterState> {
+    let limiter = GovernorConfigBuilder::default()
+        .key_extractor(RateLimitKeyExtractor::new(config))
+        .per_second(config.rate_limit.auth_period_seconds)
+        .burst_size(config.rate_limit.auth_burst)
+        .finish()
+        .expect("valid governor config");
 
     let governor_limiter = limiter.limiter().clone();
     tokio::task::spawn(async move {
@@ -45,11 +51,15 @@ pub fn router() -> ApiRouter<RouterState> {
         }
     });
 
+    // `Router::layer` only wraps routes registered before it. The credential
+    // routes go above the layer; `/auth/me` and `/auth/logout` stay below it,
+    // because the dashboard calls them on every page load and an office NAT
+    // would exhaust a shared bucket.
     ApiRouter::new()
-        .layer(GovernorLayer::new(limiter))
-        .api_route("/auth/me", get(me))
         .api_route("/auth/setup", post(setup))
         .api_route("/auth/login", post(login))
+        .layer(GovernorLayer::new(limiter))
+        .api_route("/auth/me", get(me))
         .api_route("/auth/logout", post(logout))
         // Plain axum routes (browser redirects, not part of the documented JSON API).
         .route("/auth/oidc/login", axum::routing::get(oidc_login))

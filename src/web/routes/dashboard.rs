@@ -109,6 +109,10 @@ async fn project_graph_handler(
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 
+    if let Err(reason) = req.range.validate() {
+        http_bail!(StatusCode::BAD_REQUEST, "{reason}")
+    }
+
     let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if app.is_metric_hidden(&project.id, &entities, req.metric) {
@@ -152,6 +156,10 @@ async fn project_stats_handler(
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
     }
 
+    if let Err(reason) = req.range.validate() {
+        http_bail!(StatusCode::BAD_REQUEST, "{reason}")
+    }
+
     let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
     let (event, filters) = reports::split_event_scope(&req.filters);
     reports::validate_entity_filters(&filters, &entities).http_status(StatusCode::BAD_REQUEST)?;
@@ -162,7 +170,9 @@ async fn project_stats_handler(
 
     let event_scoped = event != reports::DEFAULT_EVENT;
     let range = req.range.clone();
-    let range_prev = req.range.prev();
+    let Some(range_prev) = req.range.prev() else {
+        http_bail!(StatusCode::BAD_REQUEST, "Range has no representable preceding period")
+    };
     let (event2, filters2) = (event.clone(), filters.clone());
 
     let (stats, stats_prev) = tokio::try_join!(
@@ -201,6 +211,10 @@ async fn project_detailed_handler(
 
     if !can_view_project(&project, user.as_ref()) {
         http_bail!(StatusCode::NOT_FOUND, "Project not found")
+    }
+
+    if let Err(reason) = req.range.validate() {
+        http_bail!(StatusCode::BAD_REQUEST, "{reason}")
     }
 
     let entities = app.projects.entity_ids(&project.id).http_status(StatusCode::INTERNAL_SERVER_ERROR)?;

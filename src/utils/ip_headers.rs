@@ -178,8 +178,8 @@ pub fn deserialize_trusted_proxies<'de, D: serde::Deserializer<'de>>(
     Ok(proxies)
 }
 
-pub fn parse_header_ip(parts: &http::request::Parts, header: &TrustedHeader) -> Option<IpAddr> {
-    let value = parts.headers.get(header.as_header_name())?.to_str().ok()?.trim();
+pub fn parse_header_ip(headers: &http::HeaderMap, header: &TrustedHeader) -> Option<IpAddr> {
+    let value = headers.get(header.as_header_name())?.to_str().ok()?.trim();
     match header {
         TrustedHeader::CloudfrontViewerAddress => value.rsplit_once(':')?.0.parse().ok(),
         TrustedHeader::XForwardedFor => value.split(',').next_back()?.trim().parse().ok(),
@@ -202,6 +202,22 @@ pub fn should_trust_forwarded_headers(
 ) -> bool {
     use_forward_headers
         && (proxies.is_empty() || peer_ip.is_some_and(|ip| proxies.iter().any(|proxy| proxy.contains(ip))))
+}
+
+/// Whether forwarded headers may be trusted for rate-limit keying.
+///
+/// Deliberately stricter than [`should_trust_forwarded_headers`]: an empty proxy
+/// list means "trust nobody" rather than "trust everybody". Trusting an
+/// unverified header here would let any direct client escape its bucket by
+/// sending a fresh `X-Real-Ip` per request.
+pub fn should_trust_forwarded_headers_for_rate_limit(
+    use_forward_headers: bool,
+    peer_ip: Option<IpAddr>,
+    proxies: &[TrustedProxy],
+) -> bool {
+    use_forward_headers
+        && !proxies.is_empty()
+        && peer_ip.is_some_and(|ip| proxies.iter().any(|proxy| proxy.contains(ip)))
 }
 
 pub fn public_ip(ip: Option<IpAddr>) -> Option<IpAddr> {
@@ -240,12 +256,12 @@ mod tests {
             .header("X-Client-IP", "8.8.4.4")
             .body(())
             .unwrap();
-        let (parts, _) = req.into_parts();
+        let headers = req.headers();
 
-        assert_eq!(parse_header_ip(&parts, &TrustedHeader::XForwardedFor), Some("8.8.8.8".parse().unwrap()));
-        assert_eq!(parse_header_ip(&parts, &TrustedHeader::Forwarded), Some("1.1.1.1".parse().unwrap()));
+        assert_eq!(parse_header_ip(headers, &TrustedHeader::XForwardedFor), Some("8.8.8.8".parse().unwrap()));
+        assert_eq!(parse_header_ip(headers, &TrustedHeader::Forwarded), Some("1.1.1.1".parse().unwrap()));
         assert_eq!(
-            parse_header_ip(&parts, &TrustedHeader::Other("x-client-ip".to_string())),
+            parse_header_ip(headers, &TrustedHeader::Other("x-client-ip".to_string())),
             Some("8.8.4.4".parse().unwrap())
         );
     }
@@ -258,6 +274,19 @@ mod tests {
         assert!(!should_trust_forwarded_headers(true, Some("10.0.0.2".parse().unwrap()), &trusted));
         assert!(should_trust_forwarded_headers(true, Some("10.0.0.2".parse().unwrap()), &[]));
         assert!(!should_trust_forwarded_headers(false, Some("10.0.0.1".parse().unwrap()), &trusted));
+    }
+
+    #[test]
+    fn rate_limit_trust_decision_requires_a_listed_proxy() {
+        let trusted = vec![TrustedProxy::Cidr("10.0.0.0/8".parse().unwrap())];
+
+        assert!(should_trust_forwarded_headers_for_rate_limit(true, Some("10.1.2.3".parse().unwrap()), &trusted));
+        assert!(!should_trust_forwarded_headers_for_rate_limit(true, Some("8.8.8.8".parse().unwrap()), &trusted));
+        assert!(!should_trust_forwarded_headers_for_rate_limit(false, Some("10.1.2.3".parse().unwrap()), &trusted));
+        assert!(!should_trust_forwarded_headers_for_rate_limit(true, None, &trusted));
+        // Unlike the visitor-grouping predicate, an empty list trusts nobody.
+        assert!(!should_trust_forwarded_headers_for_rate_limit(true, Some("10.1.2.3".parse().unwrap()), &[]));
+        assert!(should_trust_forwarded_headers(true, Some("10.1.2.3".parse().unwrap()), &[]));
     }
 
     #[test]

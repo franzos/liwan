@@ -1,5 +1,6 @@
 use crate::app::DuckDBConn;
 use crate::utils::duckdb::{ParamVec, repeat_vars};
+use crate::utils::validate;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Days, Duration, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
@@ -57,6 +58,18 @@ pub fn build_graph_buckets(
         return Ok(Vec::new());
     }
 
+    // Bucket count first: a wide range would otherwise allocate one bucket per
+    // hour before anything checks the total. The +2 covers the leading partial
+    // bucket and integer truncation; the handler's post-hoc check is exact.
+    let expected_buckets = match interval {
+        GraphInterval::Hour => range.duration().num_hours(),
+        GraphInterval::Day => range.duration().num_days(),
+    }
+    .saturating_add(2);
+    if expected_buckets > i64::from(validate::MAX_DATAPOINTS) {
+        anyhow::bail!("Too many data points");
+    }
+
     let timezone_name = timezone.unwrap_or("UTC");
     let timezone: Tz = timezone_name.parse().with_context(|| format!("Invalid timezone: {timezone_name}"))?;
 
@@ -76,7 +89,9 @@ pub fn build_graph_buckets(
 
     while bucket_start < range.end {
         let next_bucket_start = match interval {
-            GraphInterval::Hour => bucket_start + Duration::hours(1),
+            GraphInterval::Hour => {
+                bucket_start.checked_add_signed(Duration::hours(1)).context("Failed to advance bucket hour")?
+            }
             GraphInterval::Day => {
                 let next_date = bucket_start
                     .with_timezone(&timezone)
@@ -283,6 +298,16 @@ mod tests {
                 .to_string(),
             "2024-01-03 12:00"
         );
+    }
+
+    #[test]
+    fn build_graph_buckets_rejects_when_hourly_count_exceeds_max_datapoints() {
+        let start = local_datetime(Tz::UTC, 2024, 1, 1, 0, 0);
+        let range = DateRange { start, end: start + Duration::hours(i64::from(validate::MAX_DATAPOINTS) + 10) };
+        assert!(build_graph_buckets(&range, GraphInterval::Hour, Some("UTC")).is_err());
+
+        let range = DateRange { start, end: start + Duration::hours(24) };
+        assert_eq!(build_graph_buckets(&range, GraphInterval::Hour, Some("UTC")).expect("24h fits").len(), 24);
     }
 
     #[test]

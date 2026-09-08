@@ -16,7 +16,9 @@ listen=9042 # The port to listen on (http)
 # trusted_headers=["X-Forwarded-For", "X-Client-IP"]
 
 # Trusted reverse proxies (IP or CIDR).
-# Empty by default, meaning all proxies are trusted.
+# Empty by default. For visitor grouping that means every proxy is trusted; for
+# rate limiting it means none are, so behind a reverse proxy the whole instance
+# shares one bucket until you list your proxies here.
 # trusted_proxies=["127.0.0.1", "10.0.0.0/8"]
 
 # Whether to use forwarded IP headers at all.
@@ -43,6 +45,20 @@ listen=9042 # The port to listen on (http)
 # See https://liwan.dev/guides/duckdb
 # threads=2
 # memory_limit=2G
+
+# Per-client rate limits (Optional)
+# Each client gets a token bucket: `burst` requests up front, one more every
+# `period`. Clients are keyed on the forwarded IP when the peer is listed in
+# trusted_proxies, and on the TCP peer otherwise — so behind a reverse proxy with
+# trusted_proxies unset, every client shares one bucket.
+[rate_limit]
+# Login, setup and SSO redirect routes: 5 requests, then one every 2 seconds.
+# auth_period_seconds=2
+# auth_burst=5
+
+# Event ingest: 100 requests, then one every 50ms (20/s sustained).
+# event_period_ms=50
+# event_burst=100
 
 # OpenID Connect (OIDC) single sign-on (Optional)
 # When issuer, client_id and client_secret are all set, a "Sign in with SSO"

@@ -165,3 +165,51 @@ async fn test_custom_events() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn graph_rejects_extended_year_range_without_crashing() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+    app.seed_database(10)?;
+
+    let graph_path = "/api/dashboard/project/public-project/graph";
+    let hostile = client
+        .post(
+            graph_path,
+            json!({"range":{"start":"-262143-01-01T00:00:00Z","end":"2024-01-01T00:00:00Z"},
+                   "metric":"views","interval":"day","timezone":"UTC","filters":[]}),
+        )
+        .await;
+    hostile.assert_status_bad_request();
+
+    let normal = client
+        .post(
+            graph_path,
+            json!({"range":{"start":(Utc::now() - Duration::days(7)).to_rfc3339(),"end":Utc::now().to_rfc3339()},
+                   "metric":"views","interval":"day","timezone":"UTC","filters":[]}),
+        )
+        .await;
+    normal.assert_status_success();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stats_rejects_a_thirty_year_range() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+    app.seed_database(10)?;
+
+    let res = client
+        .post(
+            "/api/dashboard/project/public-project/stats",
+            json!({"range":{"start":(Utc::now() - Duration::days(30 * 365)).to_rfc3339(),"end":Utc::now().to_rfc3339()},
+                   "filters":[]}),
+        )
+        .await;
+    res.assert_status_bad_request();
+
+    Ok(())
+}

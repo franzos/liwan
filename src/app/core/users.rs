@@ -157,11 +157,22 @@ impl LiwanUsers {
         Ok(())
     }
 
-    /// Delete a user
+    /// Delete a user and every session issued to them. Sessions join to users on
+    /// `lower(username)`, so leaving them behind hands the account to whoever
+    /// takes the name next.
+    ///
+    /// The users row matches case-sensitively, the sessions rows do not: `login`
+    /// stores whatever casing the client sent. Clearing sessions only once the
+    /// row is really gone keeps a name that matches nothing a no-op, rather than
+    /// logging someone out of an account that still exists.
     pub fn delete(&self, username: &str) -> Result<()> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare_cached("delete from users where username = ?")?;
-        stmt.execute([username])?;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+        let deleted = tx.execute("delete from users where username = ?", [username])?;
+        if deleted > 0 {
+            tx.execute("delete from sessions where lower(username) = lower(?)", [username])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 }
@@ -237,6 +248,7 @@ mod tests {
     use crate::app::Liwan;
     use crate::app::models::{AuthMethod, UserRole};
     use crate::config::Config;
+    use chrono::Utc;
 
     #[test]
     fn slugify_transforms() {
@@ -336,6 +348,43 @@ mod tests {
         let u2 = app.users.provision_oidc(iss, "sub-b", None, None, Some("Liwan Tester")).unwrap();
         assert_eq!(u1.username, "liwan-tester");
         assert_eq!(u2.username, "liwan-tester-2");
+    }
+
+    #[test]
+    fn delete_invalidates_sessions_so_a_recreated_user_does_not_inherit_them() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        app.users.create("bob", "password", UserRole::User, &[]).unwrap();
+        app.sessions.create("session-1", "bob", Utc::now() + chrono::Duration::days(14)).unwrap();
+        assert!(app.sessions.get("session-1").unwrap().is_some());
+
+        app.users.delete("bob").unwrap();
+        app.users.create("bob", "another-password", UserRole::Admin, &[]).unwrap();
+        assert!(app.sessions.get("session-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_removes_sessions_regardless_of_case() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        app.users.create("bob", "password", UserRole::User, &[]).unwrap();
+        app.sessions.create("session-1", "BoB", Utc::now() + chrono::Duration::days(14)).unwrap();
+        assert!(app.sessions.get("session-1").unwrap().is_some());
+
+        app.users.delete("bob").unwrap();
+        app.users.create("bob", "another-password", UserRole::User, &[]).unwrap();
+        assert!(app.sessions.get("session-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_with_a_non_matching_name_leaves_the_account_alone() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        app.users.create("bob", "password", UserRole::User, &[]).unwrap();
+        app.sessions.create("session-1", "bob", Utc::now() + chrono::Duration::days(14)).unwrap();
+
+        // The users row is matched case-sensitively, so this deletes nothing at
+        // all — it must not strand the account without its sessions.
+        app.users.delete("BoB").unwrap();
+        assert!(app.users.get("bob").is_ok());
+        assert!(app.sessions.get("session-1").unwrap().is_some());
     }
 
     #[test]

@@ -46,11 +46,39 @@ pub struct DateRange {
     pub end: DateTime<Utc>,
 }
 
+/// Widest span a dashboard query may cover. A ceiling on the arithmetic, not a
+/// product limit — no instance holds twenty years of history.
+const MAX_RANGE: chrono::Duration = chrono::Duration::days(20 * 366);
+
+/// How far past now a range may end, to leave room for client clock skew and
+/// timezone-shifted "today".
+const MAX_RANGE_END_AHEAD: chrono::Duration = chrono::Duration::days(366);
+
 impl DateRange {
-    /// Return the immediately preceding range with the same duration
-    pub fn prev(&self) -> Self {
+    /// Reject a range no dashboard would ask for. chrono deserializes extended
+    /// years (-262143 to +262142), which overflow the date arithmetic below and
+    /// let an unauthenticated request take the process down.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.start >= self.end {
+            return Err("range start must be before its end");
+        }
+        if self.start.timestamp() < 0 {
+            return Err("range start must be at or after 1970-01-01T00:00:00Z");
+        }
+        if self.end > Utc::now() + MAX_RANGE_END_AHEAD {
+            return Err("range end must be within a year of now");
+        }
+        if self.duration() > MAX_RANGE {
+            return Err("range must span at most 20 years");
+        }
+        Ok(())
+    }
+
+    /// Return the immediately preceding range with the same duration, or `None`
+    /// when it would fall outside the representable range.
+    pub fn prev(&self) -> Option<Self> {
         let duration = self.end - self.start;
-        Self { start: self.start - duration, end: self.start }
+        Some(Self { start: self.start.checked_sub_signed(duration)?, end: self.start })
     }
 
     /// Return whether the range ends after the current time
@@ -264,6 +292,46 @@ mod tests {
             strict: None,
             value: Some(value.to_string()),
         }
+    }
+
+    fn range(start: &str, end: &str) -> DateRange {
+        DateRange { start: start.parse().expect("invalid start"), end: end.parse().expect("invalid end") }
+    }
+
+    #[test]
+    fn validate_rejects_inverted_range() {
+        assert!(range("2024-02-01T00:00:00Z", "2024-01-01T00:00:00Z").validate().is_err());
+        assert!(range("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_extended_year_start() {
+        let start: DateTime<Utc> = "-262143-01-01T00:00:00Z".parse().expect("extended years parse");
+        assert!(DateRange { start, end: "2024-01-01T00:00:00Z".parse().unwrap() }.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_far_future_end() {
+        let end = Utc::now() + chrono::Duration::days(400);
+        assert!(DateRange { start: Utc::now(), end }.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_span_over_20_years() {
+        assert!(range("1990-01-01T00:00:00Z", "2024-01-01T00:00:00Z").validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_a_normal_range() {
+        let end = Utc::now();
+        let start = end - chrono::Duration::days(30);
+        DateRange { start, end }.validate().expect("a 30-day range up to now is valid");
+    }
+
+    #[test]
+    fn prev_returns_the_preceding_equal_length_range() {
+        let prev = range("2024-01-08T00:00:00Z", "2024-01-15T00:00:00Z").prev().expect("prev is representable");
+        assert_eq!(prev, range("2024-01-01T00:00:00Z", "2024-01-08T00:00:00Z"));
     }
 
     #[test]

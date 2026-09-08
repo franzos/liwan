@@ -1,11 +1,12 @@
 use crate::app::models::{GeoDetail, ResolvedCollectionSettings, VisitorGroupMode, hostname_allowed};
 use crate::app::{Liwan, models::Event};
+use crate::config::Config;
 use crate::utils::hash::{visitor_group_id, visitor_group_id_cidr, visitor_group_id_fallback};
 use crate::utils::ingest::{Utm, clean_referrer, extract_utm, normalize_url};
 use crate::utils::referrer::{Referrer, process_referer};
 use crate::utils::useragent;
 use crate::web::RouterState;
-use crate::web::webext::{ApiResult, AxumErrExt, ClientIp, empty_response};
+use crate::web::webext::{ApiResult, AxumErrExt, ClientIp, RateLimitKeyExtractor, empty_response};
 
 use aide::axum::routing::post;
 use aide::axum::{ApiRouter, IntoApiResponse};
@@ -23,9 +24,13 @@ use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use url::Url;
 
-pub fn router() -> ApiRouter<RouterState> {
-    let limiter =
-        GovernorConfigBuilder::default().per_second(2).burst_size(10).finish().expect("valid governor config");
+pub fn router(config: &Config) -> ApiRouter<RouterState> {
+    let limiter = GovernorConfigBuilder::default()
+        .key_extractor(RateLimitKeyExtractor::new(config))
+        .per_millisecond(config.rate_limit.event_period_ms)
+        .burst_size(config.rate_limit.event_burst)
+        .finish()
+        .expect("valid governor config");
     let governor_limiter = limiter.limiter().clone();
 
     tokio::task::spawn(async move {
@@ -36,7 +41,9 @@ pub fn router() -> ApiRouter<RouterState> {
         }
     });
 
-    ApiRouter::new().layer(GovernorLayer::new(limiter)).route("/event", post(event_handler))
+    // `Router::layer` only wraps routes registered before it, so `/event` has to
+    // come first.
+    ApiRouter::new().route("/event", post(event_handler)).layer(GovernorLayer::new(limiter))
 }
 
 #[derive(serde::Deserialize, JsonSchema)]

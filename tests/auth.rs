@@ -54,6 +54,9 @@ async fn test_setup() -> Result<()> {
 
     let token = app.onboarding.token().unwrap().expect("onboarding should exist");
 
+    // This test makes exactly five rate-limited requests, the default burst. A
+    // sixth would return 429.
+
     // Invalid token should return 401
     let setup = json!({ "token": "invalid_token", "username": "admin2", "password": "adminadminadmin" });
     let res = client.post("/api/dashboard/auth/setup", setup).await;
@@ -78,6 +81,44 @@ async fn test_setup() -> Result<()> {
     let setup = json!({ "token": token, "username": "admin2", "password": "adminadminadmin2" });
     let res = client.post("/api/dashboard/auth/setup", setup).await;
     res.assert_status_unauthorized();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_returns_429_after_burst() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+
+    let login = json!({ "username": "nobody", "password": "wrongwrongwrong" });
+    for _ in 0..5 {
+        let res = client.post("/api/dashboard/auth/login", login.clone()).await;
+        res.assert_status_unauthorized();
+    }
+
+    let res = client.post("/api/dashboard/auth/login", login).await;
+    res.assert_status(http::StatusCode::TOO_MANY_REQUESTS);
+
+    Ok(())
+}
+
+/// `/auth/me` and `/auth/logout` are registered after the governor layer on
+/// purpose: the dashboard calls them on every page load, and a shared NAT would
+/// drain the bucket. Only route ordering enforces that, so pin it.
+#[tokio::test]
+async fn session_routes_are_not_rate_limited() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+
+    for _ in 0..20 {
+        let res = client.get("/api/dashboard/auth/me").await;
+        res.assert_status_unauthorized();
+
+        let res = client.post("/api/dashboard/auth/logout", json!({})).await;
+        res.assert_status_success();
+    }
 
     Ok(())
 }

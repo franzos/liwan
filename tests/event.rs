@@ -55,6 +55,59 @@ async fn test_event() -> Result<()> {
 }
 
 #[tokio::test]
+async fn event_endpoint_not_rate_limited_at_normal_volume() -> Result<()> {
+    let app = common::app();
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+    app.seed_database(0)?;
+
+    let event = json!({
+        "entity_id": "entity-1",
+        "name": "pageview",
+        "url": "https://example.com/"
+    });
+
+    for _ in 0..20 {
+        let res = client
+            .post_with_headers("/api/event", event.clone(), vec![("user-agent".to_string(), "test".to_string())])
+            .await;
+        res.assert_status_success();
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn event_returns_429_after_burst() -> Result<()> {
+    let mut config = liwan::config::Config::default();
+    config.rate_limit.event_burst = 3;
+    // Long enough that no token is replenished while the test runs.
+    config.rate_limit.event_period_ms = 60_000;
+    let app = liwan::app::Liwan::new_memory(config)?;
+    let (tx, _rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+    app.seed_database(0)?;
+
+    let event = json!({
+        "entity_id": "entity-1",
+        "name": "pageview",
+        "url": "https://example.com/"
+    });
+
+    for _ in 0..3 {
+        let res = client
+            .post_with_headers("/api/event", event.clone(), vec![("user-agent".to_string(), "test".to_string())])
+            .await;
+        res.assert_status_success();
+    }
+
+    let res = client.post_with_headers("/api/event", event, vec![("user-agent".to_string(), "test".to_string())]).await;
+    res.assert_status(http::StatusCode::TOO_MANY_REQUESTS);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn event_allows_cross_origin_requests() -> Result<()> {
     let app = common::app();
     let (tx, _rx) = common::events();
