@@ -92,6 +92,58 @@ pub fn validate_mappings(mappings: &[SiteMapping]) -> Result<()> {
     Ok(())
 }
 
+/// Every checkpoint for a source, in no particular order. A missing directory
+/// yields an empty list; `.tmp` files from an interrupted save are skipped.
+pub fn list_checkpoints(data_dir: &str, source: &str) -> Result<Vec<Checkpoint>> {
+    let dir = checkpoint_dir(data_dir);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err).with_context(|| format!("failed to read checkpoint directory {}", dir.display())),
+    };
+
+    let prefix = format!("{source}-");
+    let mut checkpoints = Vec::new();
+    for entry in entries {
+        let path = entry.with_context(|| format!("failed to read checkpoint directory {}", dir.display()))?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.starts_with(&prefix) || !name.ends_with(".json") {
+            continue;
+        }
+        let bytes =
+            std::fs::read(&path).with_context(|| format!("failed to read checkpoint file {}", path.display()))?;
+        checkpoints.push(
+            serde_json::from_slice::<Checkpoint>(&bytes)
+                .with_context(|| format!("failed to parse checkpoint file {}", path.display()))?,
+        );
+    }
+    Ok(checkpoints)
+}
+
+/// Refuse a mapping whose entity another site already owns.
+///
+/// Imported rows carry no site identity, so `import_site`'s tail delete cannot
+/// tell them apart: importing site 4 into an entity site 3 already filled would
+/// wipe site 3's history. `validate_mappings` only catches this within a single
+/// invocation; the checkpoints are the record across runs.
+pub fn guard_entity_not_remapped(mapping: &SiteMapping, checkpoints: &[Checkpoint]) -> Result<()> {
+    for checkpoint in checkpoints {
+        if checkpoint.entity_id == mapping.entity_id && checkpoint.id_site != mapping.id_site {
+            bail!(
+                "entity '{}' was already imported from site {}, but this run maps it from site {}; \
+                 importing would delete site {}'s rows, because imported rows carry no site identity; \
+                 delete the checkpoint file {} to re-import deliberately",
+                mapping.entity_id,
+                checkpoint.id_site,
+                mapping.id_site,
+                checkpoint.id_site,
+                checkpoint_file(&checkpoint.source, checkpoint.id_site),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Resolve the import start for a site: the checkpoint watermark on resume, `--since` on first run
 pub fn resolve_start(
     mapping: &SiteMapping,
@@ -277,6 +329,61 @@ mod tests {
             .collect();
         assert_eq!(files, vec!["matomo-3.json"]);
         assert_eq!(load_checkpoint(data_dir, "matomo", 3).unwrap().unwrap().last_timestamp, 1_717_900_000);
+    }
+
+    #[test]
+    fn list_checkpoints_reads_all_for_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_str().unwrap();
+
+        save_checkpoint(data_dir, &checkpoint()).unwrap();
+        save_checkpoint(data_dir, &Checkpoint { id_site: 4, entity_id: "docs".to_string(), ..checkpoint() }).unwrap();
+        save_checkpoint(data_dir, &Checkpoint { source: "plausible".to_string(), ..checkpoint() }).unwrap();
+
+        let mut found = list_checkpoints(data_dir, "matomo").unwrap();
+        found.sort_by_key(|c| c.id_site);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].entity_id, "blog");
+        assert_eq!(found[1].entity_id, "docs");
+    }
+
+    #[test]
+    fn list_checkpoints_empty_dir_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(list_checkpoints(dir.path().to_str().unwrap(), "matomo").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_checkpoints_ignores_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_str().unwrap();
+        save_checkpoint(data_dir, &checkpoint()).unwrap();
+        std::fs::write(dir.path().join("import").join("matomo-9.json.tmp"), b"not json").unwrap();
+
+        let found = list_checkpoints(data_dir, "matomo").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id_site, 3);
+    }
+
+    #[test]
+    fn guard_entity_not_remapped_rejects_cross_site_reuse() {
+        let err = guard_entity_not_remapped(&mapping(4, "blog"), &[checkpoint()]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("site 3"), "got: {message}");
+        assert!(message.contains("site 4"), "got: {message}");
+        assert!(message.contains("blog"), "got: {message}");
+        assert!(message.contains("matomo-3.json"), "got: {message}");
+    }
+
+    #[test]
+    fn guard_entity_not_remapped_allows_same_site() {
+        assert!(guard_entity_not_remapped(&mapping(3, "blog"), &[checkpoint()]).is_ok());
+    }
+
+    #[test]
+    fn guard_entity_not_remapped_allows_unrelated_entities() {
+        assert!(guard_entity_not_remapped(&mapping(4, "docs"), &[checkpoint()]).is_ok());
+        assert!(guard_entity_not_remapped(&mapping(4, "docs"), &[]).is_ok());
     }
 
     #[test]

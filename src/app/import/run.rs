@@ -8,8 +8,8 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 
 use crate::app::Liwan;
 use crate::app::import::{
-    Checkpoint, ImportStats, SiteMapping, chunk_windows, guard_destructive_settings, load_checkpoint, matomo,
-    resolve_start, save_checkpoint, validate_entities, validate_mappings,
+    Checkpoint, ImportStats, SiteMapping, chunk_windows, guard_destructive_settings, guard_entity_not_remapped,
+    list_checkpoints, load_checkpoint, matomo, resolve_start, save_checkpoint, validate_entities, validate_mappings,
 };
 use crate::app::models::ResolvedCollectionSettings;
 use crate::config::Config;
@@ -50,10 +50,15 @@ pub async fn run_matomo(config: Config, opts: MatomoImportOptions) -> Result<()>
     let app = Liwan::try_new(config)?;
     validate_entities(&app, &mappings)?;
 
+    // Planned up front, before any tail delete, so a bad mapping aborts the whole
+    // run rather than taking half of it out.
+    let existing_checkpoints = list_checkpoints(&data_dir, SOURCE)?;
+
     let mut plans = Vec::with_capacity(mappings.len());
     for mapping in mappings {
         let settings = app.settings.resolved_for_entity(&mapping.entity_id);
         guard_destructive_settings(&mapping.entity_id, &settings, opts.force)?;
+        guard_entity_not_remapped(&mapping, &existing_checkpoints)?;
         let checkpoint = load_checkpoint(&data_dir, SOURCE, mapping.id_site)?;
         let watermark = resolve_start(&mapping, checkpoint.as_ref(), since)?;
         plans.push((mapping, settings, watermark));

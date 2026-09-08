@@ -2,6 +2,17 @@ use crate::app::{SqlitePool, models};
 use crate::utils::hash::{hash_password, verify_password};
 use crate::utils::validate;
 use anyhow::{Context, Result, bail};
+use rusqlite::OptionalExtension;
+
+/// What [`LiwanUsers::update_password`] did, so callers can distinguish a refusal
+/// from a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordUpdateOutcome {
+    Updated,
+    UserNotFound,
+    /// The account signs in through the IdP and has no local password.
+    NotPasswordAuth,
+}
 
 #[derive(Clone)]
 pub struct LiwanUsers {
@@ -147,14 +158,34 @@ impl LiwanUsers {
         Ok(())
     }
 
-    /// Update a user's password
-    pub fn update_password(&self, username: &str, password: &str) -> Result<()> {
+    /// Update a user's password.
+    ///
+    /// Refuses OIDC accounts: a local password on one is a login path that
+    /// outlives IdP deactivation and MFA, while the UI still reports SSO-only.
+    /// The break-glass for a locked-out SSO admin is `liwan add-user`.
+    pub fn update_password(&self, username: &str, password: &str) -> Result<PasswordUpdateOutcome> {
         let conn = self.pool.get()?;
+        // Same connection for the check and the update, so a concurrent auth
+        // change cannot slip between them.
+        let auth: Option<String> = conn
+            .prepare_cached("select auth from users where username = ?")?
+            .query_row([username], |row| row.get(0))
+            .optional()?;
+
+        let Some(auth) = auth else {
+            return Ok(PasswordUpdateOutcome::UserNotFound);
+        };
+        // An unrecognised auth value is not `password`, so it is refused too.
+        if models::AuthMethod::try_from(auth) != Ok(models::AuthMethod::Password) {
+            return Ok(PasswordUpdateOutcome::NotPasswordAuth);
+        }
+
         let password_hash = hash_password(password)?;
-        let mut stmt =
-            conn.prepare_cached("update users set password_hash = :password_hash where username = :username")?;
+        let mut stmt = conn.prepare_cached(
+            "update users set password_hash = :password_hash where username = :username and auth = 'password'",
+        )?;
         stmt.execute(rusqlite::named_params! { ":password_hash": password_hash, ":username": username })?;
-        Ok(())
+        Ok(PasswordUpdateOutcome::Updated)
     }
 
     /// Delete a user and every session issued to them. Sessions join to users on
@@ -348,6 +379,35 @@ mod tests {
         let u2 = app.users.provision_oidc(iss, "sub-b", None, None, Some("Liwan Tester")).unwrap();
         assert_eq!(u1.username, "liwan-tester");
         assert_eq!(u2.username, "liwan-tester-2");
+    }
+
+    #[test]
+    fn update_password_refuses_oidc_account() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let user = app.users.provision_oidc("https://idp", "sub-1", Some("a@b.com"), Some("alice"), None).unwrap();
+
+        assert_eq!(
+            app.users.update_password(&user.username, "newpasswordnew").unwrap(),
+            PasswordUpdateOutcome::NotPasswordAuth
+        );
+        // Still no local login path.
+        assert!(!app.users.check_login(&user.username, "newpasswordnew").unwrap());
+    }
+
+    #[test]
+    fn update_password_reports_unknown_user() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        assert_eq!(app.users.update_password("nobody", "newpasswordnew").unwrap(), PasswordUpdateOutcome::UserNotFound);
+    }
+
+    #[test]
+    fn update_password_updates_password_account() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        app.users.create("bob", "oldpasswordold", UserRole::User, &[]).unwrap();
+
+        assert_eq!(app.users.update_password("bob", "newpasswordnew").unwrap(), PasswordUpdateOutcome::Updated);
+        assert!(app.users.check_login("bob", "newpasswordnew").unwrap());
+        assert!(!app.users.check_login("bob", "oldpasswordold").unwrap());
     }
 
     #[test]

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     PASSWORD_MIN_LENGTH,
     app::{
+        PasswordUpdateOutcome,
         models::{
             CollectionSettings, Entity, EntityCollectionSettings, Project, ProjectDisplaySettings,
             ResolvedCollectionSettings, UserRole,
@@ -296,11 +297,18 @@ async fn update_user_password(
         http_bail!(StatusCode::BAD_REQUEST, "password must be at least 8 characters long");
     }
 
-    app.users
+    let outcome = app
+        .users
         .update_password(&username, &params.password)
         .http_err("Failed to update password", StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(empty_response())
+    match outcome {
+        PasswordUpdateOutcome::Updated => Ok(empty_response()),
+        PasswordUpdateOutcome::UserNotFound => http_bail!(StatusCode::NOT_FOUND, "User not found"),
+        PasswordUpdateOutcome::NotPasswordAuth => {
+            http_bail!(StatusCode::CONFLICT, "This account signs in via SSO and has no local password")
+        }
+    }
 }
 
 async fn remove_user(

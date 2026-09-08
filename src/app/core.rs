@@ -17,7 +17,7 @@ pub use onboarding::LiwanOnboarding;
 pub use projects::LiwanProjects;
 pub use sessions::LiwanSessions;
 pub use settings::{LiwanProjectSettings, LiwanSettings};
-pub use users::LiwanUsers;
+pub use users::{LiwanUsers, PasswordUpdateOutcome};
 
 #[cfg(feature = "geoip")]
 mod geoip;

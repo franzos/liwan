@@ -7,7 +7,7 @@ use axum::{
     extract::State,
     routing::{get, post},
 };
-use common::{TestClient, cookies, events};
+use common::{TestClient, cookie_header, cookies, events};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use liwan::app::Liwan;
 use liwan::config::{Config, OidcRegistration};
@@ -182,6 +182,49 @@ async fn oidc_finish_login_verifies_claims() {
     assert_eq!(claims.subject, "sub-abc");
     assert_eq!(claims.email.as_deref(), Some("alice@example.com"));
     assert_eq!(claims.preferred_username.as_deref(), Some("alice"));
+}
+
+#[tokio::test]
+async fn oidc_admin_cannot_set_a_local_password_via_the_api() {
+    let mock = spawn_mock_idp().await;
+    let app = oidc_app(&mock.issuer);
+    let (tx, _rx) = events();
+    let client = TestClient::new(app.clone(), tx);
+
+    let res = run_oidc_flow(&app, &mock, &client).await;
+    assert_eq!(location(&res), "/", "SSO login should succeed");
+    let session_cookies = cookies(&res);
+
+    let user = app.users.all().unwrap().pop().expect("provisioned user");
+    app.users.update(&user.username, liwan::app::models::UserRole::Admin, &[]).unwrap();
+
+    let res = client
+        .put_with_headers(
+            &format!("/api/dashboard/user/{}/password", user.username),
+            json!({ "password": "newpasswordnew" }),
+            vec![("cookie".to_string(), cookie_header(&session_cookies))],
+        )
+        .await;
+    res.assert_status(http::StatusCode::CONFLICT);
+
+    // The account still has no local login path.
+    assert!(!app.users.check_login(&user.username, "newpasswordnew").unwrap());
+}
+
+#[tokio::test]
+async fn oidc_login_returns_429_after_burst() {
+    let mock = spawn_mock_idp().await;
+    let app = oidc_app(&mock.issuer);
+    let (tx, _rx) = events();
+    let client = TestClient::new(app, tx);
+
+    for _ in 0..5 {
+        let res = client.get("/api/dashboard/auth/oidc/login").await;
+        res.assert_status(http::StatusCode::SEE_OTHER);
+    }
+
+    let res = client.get("/api/dashboard/auth/oidc/login").await;
+    res.assert_status(http::StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]

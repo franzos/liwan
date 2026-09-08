@@ -56,6 +56,30 @@ impl TestClient {
         self.server.post(path).json(&body).await
     }
 
+    pub async fn put_with_headers(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        headers: Vec<(String, String)>,
+    ) -> axum_test::TestResponse {
+        let mut request = self.server.put(path).json(&body);
+        for (key, value) in headers {
+            if key.to_lowercase() == "cookie" {
+                for cookie_str in value.split(';').map(|s| s.trim()) {
+                    if let Some((name, val)) = cookie_str.split_once('=') {
+                        request = request.add_cookie(Cookie::new(name.trim(), val.trim()));
+                    }
+                }
+            } else {
+                request = request.add_header(
+                    key.parse::<axum::http::HeaderName>().unwrap(),
+                    value.parse::<axum::http::HeaderValue>().unwrap(),
+                );
+            }
+        }
+        request.await
+    }
+
     pub async fn post_with_headers(
         &self,
         path: &str,

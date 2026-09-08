@@ -58,12 +58,13 @@ pub fn router(config: &Config) -> ApiRouter<RouterState> {
     ApiRouter::new()
         .api_route("/auth/setup", post(setup))
         .api_route("/auth/login", post(login))
+        // Plain axum routes (browser redirects, not part of the documented JSON API).
+        // `/auth/oidc/login` performs IdP discovery per request, so it is limited too.
+        .route("/auth/oidc/login", axum::routing::get(oidc_login))
+        .route("/auth/oidc/callback", axum::routing::get(oidc_callback))
         .layer(GovernorLayer::new(limiter))
         .api_route("/auth/me", get(me))
         .api_route("/auth/logout", post(logout))
-        // Plain axum routes (browser redirects, not part of the documented JSON API).
-        .route("/auth/oidc/login", axum::routing::get(oidc_login))
-        .route("/auth/oidc/callback", axum::routing::get(oidc_callback))
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]

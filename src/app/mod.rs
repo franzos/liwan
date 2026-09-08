@@ -15,7 +15,7 @@ use core::{
     LiwanEntities, LiwanEvents, LiwanOidc, LiwanOidcState, LiwanOnboarding, LiwanProjectSettings, LiwanProjects,
     LiwanSessions, LiwanSettings, LiwanUsers,
 };
-pub use core::{RegistrationDecision, RejectReason, email_domain, evaluate_registration};
+pub use core::{PasswordUpdateOutcome, RegistrationDecision, RejectReason, email_domain, evaluate_registration};
 use duckdb::DuckdbConnectionManager;
 use models::{DisplayOverride, GeoDetail};
 use reports::{Dimension, Metric};

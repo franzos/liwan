@@ -1,8 +1,8 @@
 use crate::{
-    app::{Liwan, models::UserRole},
+    app::{Liwan, PasswordUpdateOutcome, models::UserRole},
     config::{Config, DEFAULT_CONFIG, GeoIpConfig},
 };
-use anyhow::Result;
+use anyhow::{Result, bail};
 use argh::FromArgs;
 
 #[derive(FromArgs)]
@@ -200,8 +200,15 @@ pub async fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
     match cmd {
         Command::UpdatePassword(update) => {
             let app = Liwan::try_new(config)?;
-            app.users.update_password(&update.username, &update.password)?;
-            println!("Password updated for user {}", update.username);
+            match app.users.update_password(&update.username, &update.password)? {
+                PasswordUpdateOutcome::Updated => println!("Password updated for user {}", update.username),
+                PasswordUpdateOutcome::UserNotFound => bail!("user {} does not exist", update.username),
+                PasswordUpdateOutcome::NotPasswordAuth => bail!(
+                    "user {} signs in via SSO and has no local password; \
+                     use `liwan add-user` to create a separate local admin instead",
+                    update.username
+                ),
+            }
         }
         Command::Users(_) => {
             let app = Liwan::try_new(config)?;
@@ -325,4 +332,27 @@ pub async fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn update_password_cli_rejects_oidc_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.data_dir = dir.path().to_str().unwrap().to_string();
+
+        let app = Liwan::try_new(config.clone()).unwrap();
+        let user = app.users.provision_oidc("https://idp", "sub-1", Some("a@b.com"), Some("alice"), None).unwrap();
+        drop(app);
+
+        let cmd = Command::UpdatePassword(UpdatePassword {
+            username: user.username.clone(),
+            password: "newpasswordnew".to_string(),
+        });
+        let err = handle_command(config, cmd).await.unwrap_err();
+        assert!(err.to_string().contains("signs in via SSO"), "got: {err}");
+    }
 }

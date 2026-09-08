@@ -331,7 +331,22 @@ impl Config {
             bail!("Invalid base URL: protocol must be either http or https");
         }
         if base_url.scheme() != "https" {
-            tracing::warn!("Base URL is not using HTTPS");
+            if config.oidc.enabled() {
+                tracing::warn!(
+                    "Base URL is not using HTTPS; the session and OIDC state cookies are sent without the Secure flag"
+                );
+            } else {
+                tracing::warn!("Base URL is not using HTTPS");
+            }
+        }
+        if config.oidc.enabled() {
+            let issuer = config.oidc.issuer.as_deref().expect("checked by enabled()");
+            let issuer_url = Url::from_str(issuer).context("Invalid oidc.issuer")?;
+            if !is_https_or_loopback(&issuer_url) {
+                bail!(
+                    "Invalid oidc.issuer: must use https (the client secret, authorization code and ID token travel over it); http is allowed only for localhost"
+                );
+            }
         }
         if config.listen.is_some() && config.port.is_some() {
             tracing::warn!(
@@ -378,6 +393,20 @@ impl Config {
 
     pub fn secure(&self) -> bool {
         self.base_url.starts_with("https")
+    }
+}
+
+/// Plain http is tolerated only against a loopback host, so local development
+/// against an IdP on `http://localhost` keeps working.
+fn is_https_or_loopback(url: &Url) -> bool {
+    if url.scheme() == "https" {
+        return true;
+    }
+    match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
@@ -568,6 +597,39 @@ mod test {
             config.oidc.redirect_uri("https://example.com"),
             "https://example.com/api/dashboard/auth/oidc/callback"
         );
+    }
+
+    fn oidc_config_with_issuer(issuer: &str) -> Result<Config> {
+        Config::load(
+            None,
+            vec![
+                ("LIWAN_OIDC_ISSUER", issuer),
+                ("LIWAN_OIDC_CLIENT_ID", "liwan"),
+                ("LIWAN_OIDC_CLIENT_SECRET", "shhh"),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_oidc_issuer_rejects_plain_http() {
+        let err = oidc_config_with_issuer("http://idp.example").unwrap_err();
+        assert!(err.to_string().contains("oidc.issuer"), "got: {err}");
+    }
+
+    #[test]
+    fn test_oidc_issuer_allows_localhost_http() {
+        assert!(oidc_config_with_issuer("http://localhost:4444").is_ok());
+    }
+
+    #[test]
+    fn test_oidc_issuer_allows_loopback_ip_http() {
+        assert!(oidc_config_with_issuer("http://127.0.0.1:4444").is_ok());
+        assert!(oidc_config_with_issuer("http://[::1]:4444").is_ok());
+    }
+
+    #[test]
+    fn test_oidc_issuer_allows_https() {
+        assert!(oidc_config_with_issuer("https://accounts.example.com").is_ok());
     }
 
     #[test]
