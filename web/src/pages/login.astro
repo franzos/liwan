@@ -36,8 +36,14 @@ import Layout from "@/layouts/base.astro";
     </form>
     <div id="sso" hidden>
       <p class="divider">or</p>
-      <a id="sso-link" role="button" href="/api/dashboard/auth/oidc/login"
-        >Sign in with SSO</a
+      <!-- Full-page navigation only: the client router's fetch and hover
+           prefetch each start their own OIDC flow and clobber the state cookie. -->
+      <a
+        id="sso-link"
+        role="button"
+        href="/api/dashboard/auth/oidc/login"
+        data-astro-reload
+        data-astro-prefetch="false">Sign in with SSO</a
       >
     </div>
   </section>

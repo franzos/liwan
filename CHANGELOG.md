@@ -18,6 +18,12 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.6.0-fork.1`); `N` resets to 1 on each upstream sync. Each `-fork.N` entry lists only the fork's own changes on top of that upstream base; everything else comes from the corresponding upstream release, documented further below.
 -->
 
+## [v1.6.0-fork.3] - 2026-09-09
+
+### Bug Fixes
+
+- Clicking the SSO button on the login page failed intermittently
+
 ## [v1.6.0-fork.2] - 2026-09-09
 
 Security fixes from a review of the fork; no feature changes. If you run liwan behind a reverse proxy, set `trusted_proxies` — the rate limiter otherwise keys every visitor onto a single bucket.
