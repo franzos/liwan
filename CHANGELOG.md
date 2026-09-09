@@ -18,6 +18,25 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.6.0-fork.1`); `N` resets to 1 on each upstream sync. Each `-fork.N` entry lists only the fork's own changes on top of that upstream base; everything else comes from the corresponding upstream release, documented further below.
 -->
 
+## [v1.6.0-fork.2] - 2026-09-09
+
+Security fixes from a review of the fork; no feature changes. If you run liwan behind a reverse proxy, set `trusted_proxies` — the rate limiter otherwise keys every visitor onto a single bucket.
+
+### Security
+
+- Rate limiting now applies to the login, setup and SSO routes
+- Rate limiting now applies to event ingest
+- Crafted dashboard date ranges could crash the server
+- Deleting a user now revokes their sessions
+- Setting a local password on an SSO account is refused
+- The OIDC issuer must use https outside localhost
+- Matomo import refuses to reuse an entity owned by another site
+
+### Other
+
+- New `[rate_limit]` config table for burst and refill tuning
+- Updated anyhow, chacha20 and quinn-proto
+
 ## [v1.6.0-fork.1] - 2026-06-23
 
 Synced the fork onto upstream's official `v1.6.0` release. The fork's own features — OIDC single sign-on (with sign-up restrictions and ASCII username handling), Matomo import, the custom-events dimension, and the entity dimension — all carry forward unchanged.
