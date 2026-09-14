@@ -1,132 +1,135 @@
 [package]
-name="liwan"
-version="1.6.0-fork.3"
-edition="2024"
-rust-version="1.95"
-repository="https://github.com/explodingcamera/liwan"
-license="Apache-2.0"
-publish=false
+name = "liwan"
+version = "1.6.0-fork.3"
+edition = "2024"
+rust-version = "1.98"
+repository = "https://github.com/explodingcamera/liwan"
+license = "Apache-2.0"
+publish = false
 
 [lib]
-path="src/lib.rs"
+path = "src/lib.rs"
 
 [[bin]]
-name="liwan"
-path="src/main.rs"
+name = "liwan"
+path = "src/main.rs"
 
 [[bench]]
-name="reports"
-harness=false
+harness = false
+name = "reports"
 
 [dependencies]
 # async/concurrency
-arc-swap="1.9"
-tokio={version="1.52", default-features=false, features=["macros", "rt-multi-thread", "signal", "time"]}
-tokio-util={version="0.7", features=["io"]}
-futures-lite={version="2.6", default-features=false, features=["alloc"]}
-quick_cache={version="0.6", features=["ahash"]}
+arc-swap = "1.9"
+futures-lite = { version = "2.6", default-features = false, features = ["alloc"] }
+quick_cache = { version = "0.7" }
+tokio = { version = "1.53", default-features = false, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io", "time"] }
 
 # encoding
-deunicode="1"
-hex={version="0.4"}
-serde={version="1.0", features=["derive"]}
-serde_json={version="1.0"}
-md-5={version="0.11.0"}
-async-compression={version="0.4", default-features=false, features=["gzip", "tokio"]}
-tokio-tar={package="astral-tokio-tar", version="0.6"}
-blake3={version="1.8"}
-argon2={version="0.6.0-rc.8", features=[]}
-password-hash={version="0.6.1", features=[
-    "rand_core",
-    "getrandom",
-]} # required for getrandom feature
-zstd={version="0.13", default-features=false}
+deunicode = "1"
+hex = { version = "0.4" }
+md-5 = { version = "0.11.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+tokio-tar = { package = "astral-tokio-tar", version = "0.7" }
+zstd = { version = "0.14", default-features = false }
 
 # general
-argh={version="0.1", default-features=false, features=["help"]}
-anyhow={version="1.0"}
-rand={version="0.10", default-features=false, features=["std", "thread_rng"]}
-chrono={version="0.4", default-features=false, features=["std", "now", "serde"]}
-chrono-tz="0.10"
-config={version="0.15", default-features=false, features=["toml"]}
-tracing={version="0.1", default-features=false, features=["std"]}
-tracing-subscriber={version="0.3", features=["env-filter"]}
-ahash="0.8"
-nix={version="0.31", features=["user"]}
+ahash = "0.8"
+aide = { version = "0.16.0-alpha.4", default-features = false, features = [
+  "axum",
+  "axum-extra-cookie",
+  "axum-extra-headers",
+  "axum-json",
+  "axum-matched-path",
+  "axum-query",
+] }
+anyhow = { version = "1.0" }
+argh = { version = "0.1", default-features = false, features = ["help"] }
+argon2 = { version = "0.6.0", features = [] }
+async-compression = { version = "0.4", default-features = false, features = ["gzip", "tokio"] }
+blake3 = { version = "1.8" }
+chrono = { version = "0.4", default-features = false, features = ["now", "serde", "std"] }
+chrono-tz = "0.10"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+nix = { version = "0.31", features = ["user"] }
+rand = { version = "0.10", default-features = false, features = ["std", "thread_rng"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # web
-axum={version="0.8", default-features=false, features=[
-    "http1",
-    "tokio",
-    "json",
-    "matched-path",
-    "original-uri",
-    "query",
-]}
-axum-extra={version="0.12", default-features=false, features=["cookie", "typed-header"]}
-http="1.4"
-headers="0.4"
-tower={version="0.5", default-features=false}
-tower-http={version="0.7", default-features=false, features=[
-    "cors",
-    "compression-zstd",
-    "set-header",
-    "timeout",
-]}
-tower_governor={version="0.8", default-features=false, features=["axum"]}
-aide={version="0.16.0-alpha.4", default-features=false, features=[
-    "axum",
-    "axum-json",
-    "axum-matched-path",
-    "axum-extra-cookie",
-    "axum-extra-headers",
-]}
-schemars={version="1.2", features=["derive", "chrono04"]}
-url="2.5"
-ua-parser="0.2"
-rust-embed={version="8.11", features=["mime-guess"]}
-reqwest={version="0.13", default-features=false, features=["json", "stream", "charset", "rustls"]}
-openidconnect={version="4", default-features=false, features=["reqwest", "rustls-tls"]}
-ipnet="2.12"
+axum = { version = "0.8", default-features = false, features = [
+  "http1",
+  "json",
+  "matched-path",
+  "original-uri",
+  "query",
+  "tokio",
+] }
+axum-extra = { version = "0.12", default-features = false, features = ["cookie", "typed-header"] }
+headers = "0.4"
+http = "1.5"
+ipnet = { version = "2.12", features = ["serde"] }
+oauth2 = { git = "https://github.com/explodingcamera-contrib/oauth2-rs", default-features = false }
+openidconnect = { git = "https://github.com/explodingcamera-contrib/openidconnect-rs", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["charset", "json", "rustls", "stream"] }
+rust-embed = { version = "8.12", features = ["mime-guess"] }
+schemars = { version = "1.2", features = ["chrono04", "derive"] }
+tower = { version = "0.5", default-features = false }
+tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
+tower-http = { version = "0.7", default-features = false, features = [
+  "compression-zstd",
+  "cors",
+  "set-header",
+  "timeout",
+  "trace",
+] }
+ua-parser = "0.2"
+url = "2.5"
 
 # database
-duckdb={version="1.10504", features=["chrono", "bundled", "r2d2"]}
-rusqlite={version="0.40", features=["bundled", "modern_sqlite", "chrono"]}
-r2d2={version="0.8", default-features=false}
-refinery={version="0.9", default-features=false}
-refinery-core={version="0.9", default-features=false}
-maxminddb={version="0.28", optional=true, features=["simdutf8"]}
-mimalloc={version="0.1"}
+duckdb = { version = "1.10505", features = ["bundled", "chrono", "r2d2"] }
+maxminddb = { version = "0.31", features = ["simdutf8"], optional = true }
+mimalloc = { version = "0.1" }
+r2d2 = { version = "0.8", default-features = false }
+refinery = { version = "0.9", default-features = false }
+refinery-core = { version = "0.9", default-features = false }
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "modern_sqlite"] }
+rsntp = { version = "4.1.2", default-features = false, features = ["async"] }
 
 # import
-matomo-rs={version="0.1", default-features=false, features=["reqwest", "reqwest-rustls", "chrono"], optional=true}
+matomo-rs = { version = "0.1", default-features = false, features = ["chrono", "reqwest", "reqwest-rustls"], optional = true }
 
 [dev-dependencies]
-tempfile={version="3"}
-cookie={version="*", default-features=false}
-tower={version="*", features=["util"]}
-axum-test={version="20"}
-criterion={version="0.8", default-features=false}
-jsonwebtoken={version="10", default-features=false, features=["rust_crypto"]}
+axum-test = { version = "21" }
+cookie = { version = "*", default-features = false }
+criterion = { version = "0.8", default-features = false }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+tempfile = { version = "3" }
+tower = { version = "*", features = ["util"] }
 
 [features]
-default=["geoip"]
-geoip=["dep:maxminddb"]
-import=[]
-import-matomo=["import", "dep:matomo-rs"]
-__dev=[]
+default = ["geoip"]
+geoip = ["dep:maxminddb"]
+import = []
+import-matomo = ["import", "dep:matomo-rs"]
+__dev = []
+
+[lints.clippy]
+too_many_arguments = "allow"
 
 [profile.dev]
-opt-level=1
+opt-level = 1
 
 [profile.release]
-lto="thin"
-panic="abort"
-strip=true
-debug=false
-opt-level=3
+opt-level = 3
+debug = false
+strip = true
+lto = "thin"
+panic = "abort"
 
 [profile.profiling]
-inherits="release"
-debug=true
-strip=false
+inherits = "release"
+debug = true
+strip = false

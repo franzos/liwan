@@ -1,5 +1,8 @@
 mod common;
 use anyhow::Result;
+use liwan::app::models::Entity;
+use liwan::config::Config;
+use liwan::utils::ip_headers::{ClientIpHeaderSource, TrustedProxy};
 use serde_json::json;
 
 #[tokio::test]
@@ -23,7 +26,7 @@ async fn test_event() -> Result<()> {
     let res = client.post_with_headers("/api/event", event, vec![("user-agent".to_string(), "test".to_string())]).await;
     res.assert_status_success();
 
-    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.events.recv())
         .await
         .expect("event should be received")
         .expect("event channel should not be closed");
@@ -131,6 +134,67 @@ async fn event_allows_cross_origin_requests() -> Result<()> {
         )
         .await;
     res.assert_status_success();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn deleted_entity_does_not_accept_events() -> Result<()> {
+    let app = common::app();
+    let (tx, mut rx) = common::events();
+    let client = common::TestClient::new(app.clone(), tx);
+    app.entities
+        .create(&Entity { id: "entity-to-delete".to_string(), display_name: "Entity to delete".to_string() }, &[])?;
+
+    let event = json!({
+        "entity_id": "entity-to-delete",
+        "name": "pageview",
+        "url": "https://example.com/"
+    });
+    let headers = vec![("user-agent".to_string(), "test".to_string())];
+
+    client.post_with_headers("/api/event", event.clone(), headers.clone()).await.assert_status_success();
+    rx.events.recv().await.expect("event should be received");
+
+    app.entities.delete("entity-to-delete")?;
+    client.post_with_headers("/api/event", event, headers).await.assert_status_success();
+    assert!(rx.events.try_recv().is_err(), "deleted entity should not produce an event");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exit_payload_uses_the_exit_queue() -> Result<()> {
+    let mut config = Config::default();
+    config.trusted_headers = vec![ClientIpHeaderSource::Header("x-client-ip".to_string())].into();
+    config.trusted_proxies = vec![TrustedProxy::Ip("127.0.0.1".parse()?)].into();
+    let app = liwan::app::Liwan::new_memory(config)?;
+    let (queues, mut receivers) = common::events();
+    let client = common::TestClient::new(app.clone(), queues);
+    app.seed_database(0)?;
+
+    let event = json!({
+        "entity_id": "entity-1",
+        "name": "pageview",
+        "url": "https://example.com/",
+        "exit": true
+    });
+    client
+        .post_with_headers(
+            "/api/event",
+            event,
+            vec![("user-agent".to_string(), "test".to_string()), ("x-client-ip".to_string(), "8.8.8.8".to_string())],
+        )
+        .await
+        .assert_status_success();
+
+    let exit = tokio::time::timeout(std::time::Duration::from_secs(1), receivers.exits.recv())
+        .await
+        .expect("exit should be received")
+        .expect("exit channel should not be closed");
+    assert_eq!(exit.event, "pageview");
+    assert_eq!(exit.fqdn.as_deref(), Some("example.com"));
+    assert!(receivers.events.try_recv().is_err(), "exit payload should not insert an event");
 
     Ok(())
 }

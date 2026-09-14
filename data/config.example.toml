@@ -1,58 +1,64 @@
-base_url="http://localhost:9042" # The base URL of the Liwan instance
-listen=9042 # The port to listen on (http)
+base_url = "http://localhost:9042"  # The base URL of the Liwan instance
+listen = 9042  # The port to listen on (http)
 
-# Disable favicon fetching from the DuckDuckGo API.
-# disable_favicons=false
+## Disable favicon fetching from the DuckDuckGo API.
+# disable_favicons = false
 
-# # Folder to store the database in (Will be created if it doesn't exist)
-# # defaults to $HOME/.local/share/liwan/data on linux/macos
-# # defaults to ./liwan-data on other platforms
+## Folder to store the database in (Will be created if it doesn't exist)
+## defaults to $HOME/.local/share/liwan/data on linux/macos
+## defaults to ./liwan-data on other platforms
 # data_dir="./liwan-data"
 
-# Trusted client IP headers (used in order).
-# Defaults to all supported headers.
-# trusted_headers=["cf-connecting-ip", "fly-client-ip", "true-client-ip", "x-real-ip", "cloudfront-viewer-address", "x-forwarded-for", "forwarded"]
-# You can also include custom headers. Names are case-insensitive.
-# trusted_headers=["X-Forwarded-For", "X-Client-IP"]
+## Trusted client IP headers (used in order), defaults to X-Forwarded-For.
+## Presets: cloudflare, fastly, fly, cloudfront, akamai.
+## Provider presets can be combined with standard or custom headers.
+# trusted_headers = ["X-Forwarded-For"]
 
-# Trusted reverse proxies (IP or CIDR).
-# Empty by default. For visitor grouping that means every proxy is trusted; for
-# rate limiting it means none are, so behind a reverse proxy the whole instance
-# shares one bucket until you list your proxies here.
-# trusted_proxies=["127.0.0.1", "10.0.0.0/8"]
+## Trusted reverse proxies (IP or CIDR), defaults to the IPv4 and IPv6 loopback ranges.
+## Use "*" to trust all direct peers only when network access to liwan is restricted.
+# trusted_proxies = ["127.0.0.1/8", "::1/128"]
 
-# Whether to use forwarded IP headers at all.
-# If false, only the direct peer IP is used.
-# use_forward_headers=true
-
-# Hour of day, in the server's local timezone, when visitor grouping salts rotate.
-# Defaults to 4, meaning 4am local time.
+## Hour of day, in the server's local timezone, when visitor grouping salts rotate.
+## Defaults to 4, meaning 4am local time.
 # visitor_group_rotation_hour=4
 
-# GeoIp settings (Optional)
-[geoip]
-# # MaxMind account ID and license key
-# # Required to automatically download the database and keep it up to date
+[geoip]  # GeoIp settings (Optional)
+## MaxMind account ID and license key
+## Required to automatically download the database and keep it up to date
 # maxmind_account_id="MY_ACCOUNT_ID"
 # maxmind_license_key="MY_LICENSE_KEY"
 # maxmind_edition="GeoLite2-City"
 
-# # If you don't want to automatically download the database, you can specify a path to a local file
-# # Otherwise, the database will be downloaded automatically and stored in the data_dir
+## If you don't want to automatically download the database, you can specify a path to a local file
+## Otherwise, the database will be downloaded automatically and stored in the data_dir
 # maxmind_db_path="./GeoLite2-City.mmdb"
 
-[duckdb]
-# See https://liwan.dev/guides/duckdb
+## Read location data supplied by a trusted proxy.
+## Presets: akamai, cloudflare, cloudfront, netlify, vercel.
+## Multiple presets and custom mappings are also supported, in priority order:
+# headers=["cloudflare", { country="X-Country", city="X-City" }]
+# headers="cloudflare"
+
+[duckdb]  # Database settings
+## See https://liwan.dev/guides/duckdb for guidance
 # threads=2
 # memory_limit=2G
+
+[limits]  # Resource limits for dashboard reports.
+# report_timeout_seconds=30
+# report_max_concurrency=8
+# report_max_range_days=3660
+# report_max_dimension_results=1000
+# report_max_datapoints=2000
+# report_max_filters=20
+# report_max_filter_value_bytes=2048
 
 # Per-client rate limits (Optional)
 # Each client gets a token bucket: `burst` requests up front, one more every
 # `period`. Clients are keyed on the forwarded IP when the peer is listed in
-# trusted_proxies, and on the TCP peer otherwise — so behind a reverse proxy with
-# trusted_proxies unset, every client shares one bucket.
+# trusted_proxies, and on the TCP peer otherwise.
 [rate_limit]
-# Login, setup and SSO redirect routes: 5 requests, then one every 2 seconds.
+# Login and setup: 5 requests, then one every 2 seconds.
 # auth_period_seconds=2
 # auth_burst=5
 
@@ -60,29 +66,3 @@ listen=9042 # The port to listen on (http)
 # event_period_ms=50
 # event_burst=100
 
-# OpenID Connect (OIDC) single sign-on (Optional)
-# When issuer, client_id and client_secret are all set, a "Sign in with SSO"
-# button appears on the login page. First-time SSO users are created with no
-# project access until an admin grants it; password login keeps working.
-# The redirect URI to register with your provider is:
-#   <base_url>/api/dashboard/auth/oidc/callback
-# [oidc]
-# issuer="https://accounts.example.com"
-# client_id="liwan"
-# client_secret="..."            # prefer the LIWAN_OIDC_CLIENT_SECRET env var
-# scopes=["openid", "email", "profile"]
-# button_label="Sign in with SSO"
-
-# Who may have an account auto-created on first SSO login. Returning users
-# (matched on the IdP's stable subject) always log in, regardless of this.
-#   open             (default) any user the IdP authenticates gets an account
-#   closed           no new accounts; only existing users can log in
-#   domain_allowlist new accounts only for verified emails in allowed_domains
-# registration="domain_allowlist"
-
-# Email domains permitted to register under "domain_allowlist". Requires the
-# "email" scope above; an unverified email never qualifies. Matching is exact
-# and case-insensitive — subdomains do NOT match (example.com excludes
-# sub.example.com). Trust assumes the single configured issuer is authoritative
-# for these domains. Configure non-ASCII (IDN) domains in punycode.
-# allowed_domains=["example.com", "acme.org"]

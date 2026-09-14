@@ -3,18 +3,28 @@
 use axum_test::TestServer;
 use cookie::Cookie;
 use liwan::{
-    app::{Liwan, models::Event},
+    app::{
+        Liwan,
+        models::{Event, EventExit},
+    },
     config::Config,
 };
 use serde_json::json;
 use std::sync::Arc;
 
+pub struct EventReceivers {
+    pub events: tokio::sync::mpsc::Receiver<Event>,
+    pub exits: tokio::sync::mpsc::Receiver<EventExit>,
+}
+
 pub fn app() -> std::sync::Arc<Liwan> {
     Liwan::new_memory(Config::default()).unwrap()
 }
 
-pub fn events() -> (tokio::sync::mpsc::Sender<Event>, tokio::sync::mpsc::Receiver<Event>) {
-    tokio::sync::mpsc::channel::<Event>(1024 * 10)
+pub fn events() -> (liwan::web::EventQueues, EventReceivers) {
+    let (events, event_rx) = tokio::sync::mpsc::channel::<Event>(1024 * 10);
+    let (exits, exit_rx) = tokio::sync::mpsc::channel::<EventExit>(1024 * 10);
+    (liwan::web::EventQueues { events, exits }, EventReceivers { events: event_rx, exits: exit_rx })
 }
 
 pub struct TestClient {
@@ -22,9 +32,9 @@ pub struct TestClient {
 }
 
 impl TestClient {
-    pub fn new(app: Arc<Liwan>, events: tokio::sync::mpsc::Sender<Event>) -> Self {
-        let (router, _) = liwan::web::router(app, events).unwrap();
-        let server = TestServer::new(router);
+    pub fn new(app: Arc<Liwan>, queues: liwan::web::EventQueues) -> Self {
+        let (router, _) = liwan::web::router(app, queues).unwrap();
+        let server = TestServer::new(router.into_make_service_with_connect_info::<std::net::SocketAddr>());
         Self { server }
     }
 
@@ -104,6 +114,25 @@ impl TestClient {
         }
         request.await
     }
+
+    pub async fn delete_with_headers(&self, path: &str, headers: Vec<(String, String)>) -> axum_test::TestResponse {
+        let mut request = self.server.delete(path);
+        for (key, value) in headers {
+            if key.to_lowercase() == "cookie" {
+                for cookie_str in value.split(';').map(|s| s.trim()) {
+                    if let Some((name, val)) = cookie_str.split_once('=') {
+                        request = request.add_cookie(Cookie::new(name.trim(), val.trim()));
+                    }
+                }
+            } else {
+                request = request.add_header(
+                    key.parse::<axum::http::HeaderName>().unwrap(),
+                    value.parse::<axum::http::HeaderValue>().unwrap(),
+                );
+            }
+        }
+        request.await
+    }
 }
 
 pub fn cookies(res: &axum_test::TestResponse) -> Vec<cookie::Cookie<'static>> {
@@ -121,5 +150,6 @@ pub fn cookie_header(cookies: &[Cookie]) -> String {
 pub async fn login(client: &TestClient, username: &str, password: &str) -> Vec<cookie::Cookie<'static>> {
     let login = json!({ "username": username, "password": password });
     let res = client.post("/api/dashboard/auth/login", login).await;
+    res.assert_status_success();
     cookies(&res)
 }

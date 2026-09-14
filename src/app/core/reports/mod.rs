@@ -8,13 +8,37 @@ pub use graph::{build_graph_buckets, overall_report};
 pub use shared::validate_entity_filters;
 pub use stats::{earliest_timestamp, online_users, overall_stats};
 
-use chrono::{DateTime, Utc};
+use anyhow::{Result, bail};
+use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 
 pub use crate::app::models::FilterType;
+use crate::config::LimitsConfig;
+
+/// Validate resource limits shared by dashboard report requests.
+pub fn validate_request(range: &DateRange, filters: &[DimensionFilter], limits: &LimitsConfig) -> Result<()> {
+    if range.start >= range.end {
+        bail!("Report range must end after it starts");
+    }
+    if range.duration() > Duration::days(limits.report_max_range_days) {
+        bail!("Report range cannot exceed {} days", limits.report_max_range_days);
+    }
+    if filters.len() > limits.report_max_filters {
+        bail!("Reports cannot contain more than {} filters", limits.report_max_filters);
+    }
+    if filters
+        .iter()
+        .filter_map(|filter| filter.value.as_ref())
+        .any(|value| value.len() > limits.report_max_filter_value_bytes)
+    {
+        bail!("Report filter values cannot exceed {} bytes", limits.report_max_filter_value_bytes);
+    }
+
+    Ok(())
+}
 
 /// Default event scope for dashboard reports.
 pub const DEFAULT_EVENT: &str = "pageview";
@@ -362,5 +386,48 @@ mod tests {
         let (event, rest) = split_event_scope(&[inverted.clone()]);
         assert_eq!(event, "pageview");
         assert_eq!(rest, vec![inverted]);
+    }
+
+    fn range_days(days: i64) -> DateRange {
+        let start = DateTime::from_timestamp(0, 0).unwrap();
+        DateRange { start, end: start + Duration::days(days) }
+    }
+
+    fn filter(value: Option<String>) -> DimensionFilter {
+        DimensionFilter {
+            dimension: Dimension::Path,
+            filter_type: FilterType::Equal,
+            inversed: None,
+            strict: None,
+            value,
+        }
+    }
+
+    #[test]
+    fn request_limits_accept_large_normal_reports() {
+        let limits = LimitsConfig::default();
+        assert!(
+            validate_request(
+                &range_days(limits.report_max_range_days),
+                &vec![filter(Some("x".into())); limits.report_max_filters],
+                &limits,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn request_limits_reject_excessive_inputs() {
+        let limits = LimitsConfig::default();
+        assert!(validate_request(&range_days(limits.report_max_range_days + 1), &[], &limits).is_err());
+        assert!(validate_request(&range_days(1), &vec![filter(None); limits.report_max_filters + 1], &limits).is_err());
+        assert!(
+            validate_request(
+                &range_days(1),
+                &[filter(Some("x".repeat(limits.report_max_filter_value_bytes + 1)))],
+                &limits,
+            )
+            .is_err()
+        );
     }
 }

@@ -2,59 +2,96 @@
 @import "@picocss/pico/css/pico.slate.min.css" layer(pico);
 
 :root {
+  --font-family-text:
+    var(--font-google-sans), system-ui, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, Helvetica, Arial,
+    "Helvetica Neue", sans-serif, var(--pico-font-family-emoji);
+  --font-family-heading: var(--font-google-sans), var(--font-family-text);
+
   --pico-background-color: #eef0f9;
   --card-background-base: 0deg 0% 100%;
   --pico-card-background-color: hsl(var(--card-background-base));
-  --pico-block-spacing-vertical: 0.8rem;
-  --pico-block-spacing-horizontal: 0.8rem;
+  --pico-block-spacing-vertical: 1rem;
+  --pico-block-spacing-horizontal: 1rem;
   --pico-card-box-shadow: 0px 0px 13px #15233609;
   --pico-dropdown-background-color: #ffffff;
   --pico-dropdown-hover-background-color: #dfe7f3;
+  --pico-muted-color: #424b5b;
+  --pico-primary: #4a5873;
+  --pico-primary-hover: #37445c;
+  --pico-secondary: #4a5873;
+  --pico-secondary-hover: #37445c;
+  --pico-form-element-background-color: #ffffff;
+  --pico-form-element-border-color: #cbd3e1;
+  --pico-form-element-hover-border-color: #aab4c5;
   --graph-line-color: #2563eb;
   --graph-fill-color: 37 99 235;
   --close-icon-color: #ffffff;
   --switch-inactive-bg: #e2e8f0;
+  --settings-icon-color: #3f4858;
   --pico-line-height: 1.2;
   --pico-form-element-active-border-color: var(--pico-secondary-hover);
   --pico-form-element-focus-color: transparent;
   --pico-border-radius: 0.6rem;
   --pico-spacing: 0.75rem;
-  --pico-form-element-spacing-vertical: 0.5rem;
+  --pico-form-element-spacing-vertical: 0.425rem;
   --pico-form-element-spacing-horizontal: 0.6rem;
   --pico-table-border-color: var(--pico-card-background-color);
 
-  --pico-font-family:
-    var(--font-stack-sans-headline), system-ui, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, Helvetica, Arial,
-    "Helvetica Neue", sans-serif, var(--pico-font-family-emoji);
+  --pico-font-family: var(--font-family-text);
   --pico-font-family-sans-serif: var(--pico-font-family);
   font-variant-numeric: tabular-nums;
 
   --metric-button-active-background: #ebeef3;
+  --tag-background: var(--pico-primary-background);
 }
 
 :root[data-theme="dark"] {
   --pico-background-color: #0a0c10;
   --card-background-base: 218.8 23.9% 13.9%;
+  --pico-muted-color: #9aa4b5;
+  --pico-muted-border-color: #2a3140;
+  --pico-primary: #909ebe;
+  --pico-primary-hover: #b0b9d0;
+  --pico-h1-color: #fff;
+  --pico-secondary: #969eaf;
+  --pico-secondary-hover: #b3b9c5;
   --pico-dropdown-background-color: #181c25;
   --pico-dropdown-hover-background-color: #2d3442;
+  --pico-form-element-background-color: #222a37;
+  --pico-form-element-border-color: #3a4558;
+  --pico-form-element-hover-border-color: #56627a;
   --graph-line-color: #a6cee3;
   --graph-fill-color: 166 206 227;
   --close-icon-color: #0a0c10;
   --switch-inactive-bg: var(--pico-secondary-background);
+  --settings-icon-color: #dce2ec;
   --metric-button-active-background: #303743;
+  --tag-background: var(--pico-form-element-border-color);
 }
 
 @media only screen and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --pico-background-color: #0a0c10;
     --card-background-base: 218.8 23.9% 13.9%;
+    --pico-muted-color: #9aa4b5;
+    --pico-muted-border-color: #2a3140;
+    --pico-primary: #909ebe;
+    --pico-primary-hover: #b0b9d0;
+    --pico-h1-color: #fff;
+    --pico-secondary: #969eaf;
+    --pico-secondary-hover: #b3b9c5;
     --pico-dropdown-background-color: #181c25;
     --pico-dropdown-hover-background-color: #2d3442;
+    --pico-form-element-background-color: #222a37;
+    --pico-form-element-border-color: #3a4558;
+    --pico-form-element-hover-border-color: #56627a;
     --graph-line-color: #a6cee3;
     --graph-fill-color: 166 206 227;
     --close-icon-color: #0a0c10;
     --switch-inactive-bg: var(--pico-secondary-background);
+    --settings-icon-color: #dce2ec;
     --metric-button-active-background: #303743;
+    --tag-background: var(--pico-form-element-border-color);
   }
 }
 
@@ -65,6 +102,7 @@ h4,
 h5,
 h6 {
   --pico-font-weight: 500;
+  font-family: var(--font-family-heading);
 }
 
 html body[data-scroll-locked] {
@@ -83,6 +121,23 @@ html body[data-scroll-locked] {
 [type="reset"],
 [type="submit"] {
   margin-bottom: 0;
+}
+
+button,
+[type="button"],
+[type="reset"],
+[type="submit"],
+[role="button"] {
+  --pico-font-weight: 500;
+  --pico-border-radius: 0.4rem;
+  font-size: 0.8125rem;
+}
+
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
+select,
+textarea {
+  border-radius: 0.4rem;
+  line-height: 1.35;
 }
 
 hr {

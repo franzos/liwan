@@ -1,4 +1,5 @@
-use crate::utils::ip_headers::{TrustedHeader, TrustedProxy, deserialize_trusted_headers, deserialize_trusted_proxies};
+use crate::utils::ip_headers::{ClientIpHeaderSource, GeoIpHeaderSource, TrustedProxy};
+use crate::utils::serde::OneOrMany;
 use anyhow::{Context, Result, bail};
 use config::{File, FileFormat, Value};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,9 @@ pub struct Config {
     // don't load favicons from the duckduckgo api
     pub disable_favicons: bool,
 
+    #[serde(default)]
+    pub disable_ntp_check: bool,
+
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
 
@@ -32,19 +36,18 @@ pub struct Config {
     pub duckdb: DuckdbConfig,
 
     #[serde(default)]
-    pub rate_limit: RateLimitConfig,
+    pub limits: LimitsConfig,
 
     #[serde(default)]
-    pub oidc: OidcConfig,
+    pub rate_limit: RateLimitConfig,
 
-    #[serde(default = "default_trusted_headers", deserialize_with = "deserialize_trusted_headers")]
-    pub trusted_headers: Vec<TrustedHeader>,
+    /// Client IP header names or provider presets.
+    /// Presets: `cloudflare`, `fastly`, `fly`, `cloudfront`, and `akamai`.
+    #[serde(default = "default_trusted_headers")]
+    pub trusted_headers: OneOrMany<ClientIpHeaderSource>,
 
-    #[serde(default, deserialize_with = "deserialize_trusted_proxies")]
-    pub trusted_proxies: Vec<TrustedProxy>,
-
-    #[serde(default = "default_use_forward_headers")]
-    pub use_forward_headers: bool,
+    #[serde(default = "default_trusted_proxies")]
+    pub trusted_proxies: OneOrMany<TrustedProxy>,
 
     #[serde(default = "default_visitor_group_rotation_hour")]
     pub visitor_group_rotation_hour: u8,
@@ -57,14 +60,14 @@ impl Default for Config {
             data_dir: default_data_dir(),
             geoip: Default::default(),
             duckdb: Default::default(),
+            limits: Default::default(),
             rate_limit: Default::default(),
-            oidc: Default::default(),
             disable_favicons: false,
+            disable_ntp_check: false,
             listen: None,
             port: None,
             trusted_headers: default_trusted_headers(),
-            trusted_proxies: Vec::new(),
-            use_forward_headers: default_use_forward_headers(),
+            trusted_proxies: default_trusted_proxies(),
             visitor_group_rotation_hour: default_visitor_group_rotation_hour(),
         }
     }
@@ -72,64 +75,22 @@ impl Default for Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GeoIpConfig {
+    /// GeoIP header mappings or provider presets.
+    /// Presets: `akamai`, `cloudflare`, `cloudfront`, `netlify`, and `vercel`.
+    #[serde(default)]
+    pub headers: OneOrMany<GeoIpHeaderSource>,
     #[serde(default)]
     pub maxmind_db_path: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_string_from_number")]
-    pub maxmind_account_id: Option<String>,
+    #[serde(default)]
+    pub maxmind_account_id: Option<MaxMindAccountId>,
     #[serde(default)]
     pub maxmind_license_key: Option<String>,
     #[serde(default = "default_maxmind_edition")]
     pub maxmind_edition: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OidcConfig {
-    #[serde(default)]
-    pub issuer: Option<String>,
-    #[serde(default)]
-    pub client_id: Option<String>,
-    #[serde(default)]
-    pub client_secret: Option<String>,
-    #[serde(default = "default_oidc_scopes")]
-    pub scopes: Vec<String>,
-    #[serde(default)]
-    pub button_label: Option<String>,
-    #[serde(default)]
-    pub registration: OidcRegistration,
-    #[serde(default, deserialize_with = "deserialize_allowed_domains")]
-    pub allowed_domains: Vec<String>,
-}
-
-impl Default for OidcConfig {
-    fn default() -> Self {
-        Self {
-            issuer: None,
-            client_id: None,
-            client_secret: None,
-            scopes: default_oidc_scopes(),
-            button_label: None,
-            registration: OidcRegistration::default(),
-            allowed_domains: Vec::new(),
-        }
-    }
-}
-
-/// Who may have a local account auto-provisioned on first OIDC login.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum OidcRegistration {
-    /// Any user the IdP authenticates gets an account (today's behavior).
-    #[default]
-    Open,
-    /// No new accounts; only users who already exist can log in.
-    Closed,
-    /// New accounts only for verified emails in `allowed_domains`.
-    DomainAllowlist,
-}
-
-/// Accepts a TOML array or a comma-separated env string (mirrors
-/// `deserialize_trusted_headers`); required because `parse_env_value` only emits
-/// scalars, so a plain `Vec<String>` can't be set via `LIWAN_OIDC_ALLOWED_DOMAINS`.
+/// Accepts a TOML array or a comma-separated env string; required because
+/// `parse_env_value` only emits scalars for keys it does not know about.
 /// Normalizes each entry: trim, strip a trailing `.`, lowercase, drop empties.
 pub fn deserialize_allowed_domains<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
@@ -149,22 +110,6 @@ pub fn deserialize_allowed_domains<'de, D: serde::Deserializer<'de>>(deserialize
         .map(|v| v.trim().trim_end_matches('.').to_ascii_lowercase())
         .filter(|v| !v.is_empty())
         .collect())
-}
-
-fn default_oidc_scopes() -> Vec<String> {
-    vec!["openid".to_string(), "email".to_string(), "profile".to_string()]
-}
-
-impl OidcConfig {
-    /// OIDC is active only when issuer, client_id, and client_secret are all set.
-    pub fn enabled(&self) -> bool {
-        self.issuer.is_some() && self.client_id.is_some() && self.client_secret.is_some()
-    }
-
-    /// Derived from base_url; never configured directly.
-    pub fn redirect_uri(&self, base_url: &str) -> String {
-        format!("{}/api/dashboard/auth/oidc/callback", base_url.trim_end_matches('/'))
-    }
 }
 
 /// Per-client rate limits. Both limits are a token bucket: `burst` tokens up
@@ -217,6 +162,54 @@ pub struct DuckdbConfig {
     pub threads: Option<NonZeroU16>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LimitsConfig {
+    #[serde(default = "default_report_max_concurrency")]
+    pub report_max_concurrency: usize,
+    #[serde(default = "default_report_timeout_seconds")]
+    pub report_timeout_seconds: u64,
+    #[serde(default = "default_report_max_range_days")]
+    pub report_max_range_days: i64,
+    #[serde(default = "default_report_max_dimension_results")]
+    pub report_max_dimension_results: usize,
+    #[serde(default = "default_report_max_datapoints")]
+    pub report_max_datapoints: usize,
+    #[serde(default = "default_report_max_filters")]
+    pub report_max_filters: usize,
+    #[serde(default = "default_report_max_filter_value_bytes")]
+    pub report_max_filter_value_bytes: usize,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            report_max_concurrency: default_report_max_concurrency(),
+            report_timeout_seconds: default_report_timeout_seconds(),
+            report_max_range_days: default_report_max_range_days(),
+            report_max_dimension_results: default_report_max_dimension_results(),
+            report_max_datapoints: default_report_max_datapoints(),
+            report_max_filters: default_report_max_filters(),
+            report_max_filter_value_bytes: default_report_max_filter_value_bytes(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum MaxMindAccountId {
+    String(String),
+    Number(u64),
+}
+
+impl std::fmt::Display for MaxMindAccountId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(value) => formatter.write_str(value),
+            Self::Number(value) => value.fmt(formatter),
+        }
+    }
+}
+
 fn default_base() -> String {
     "http://localhost:9042".to_string()
 }
@@ -243,16 +236,48 @@ fn default_data_dir() -> String {
     }
 }
 
-fn default_trusted_headers() -> Vec<TrustedHeader> {
-    TrustedHeader::all().to_vec()
-}
-
-fn default_use_forward_headers() -> bool {
-    true
-}
-
 fn default_visitor_group_rotation_hour() -> u8 {
     4
+}
+
+fn default_trusted_headers() -> OneOrMany<ClientIpHeaderSource> {
+    vec![ClientIpHeaderSource::Header("x-forwarded-for".to_string())].into()
+}
+
+fn default_trusted_proxies() -> OneOrMany<TrustedProxy> {
+    vec![
+        TrustedProxy::Cidr("127.0.0.1/8".parse().expect("valid default trusted proxy")),
+        TrustedProxy::Cidr("::1/128".parse().expect("valid default trusted proxy")),
+    ]
+    .into()
+}
+
+fn default_report_max_concurrency() -> usize {
+    8
+}
+
+fn default_report_timeout_seconds() -> u64 {
+    30
+}
+
+fn default_report_max_range_days() -> i64 {
+    3660
+}
+
+fn default_report_max_dimension_results() -> usize {
+    1000
+}
+
+fn default_report_max_datapoints() -> usize {
+    2000
+}
+
+fn default_report_max_filters() -> usize {
+    20
+}
+
+fn default_report_max_filter_value_bytes() -> usize {
+    2048
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -268,25 +293,6 @@ impl ListenAddr {
             ListenAddr::Port(port) => SocketAddr::from(([0, 0, 0, 0], *port)).to_string(),
             ListenAddr::Addr(addr) => addr.clone(),
         }
-    }
-}
-
-pub fn deserialize_string_from_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrNumber {
-        String(String),
-        Number(i64),
-        Float(f64),
-    }
-
-    match StringOrNumber::deserialize(deserializer)? {
-        StringOrNumber::String(s) => Ok(Some(s)),
-        StringOrNumber::Number(i) => Ok(Some(i.to_string())),
-        StringOrNumber::Float(f) => Ok(Some(f.to_string())),
     }
 }
 
@@ -320,7 +326,7 @@ impl Config {
 
         for (key, value) in env_vars {
             if let Some(mapped_key) = map_env_key(key.as_ref()) {
-                builder = builder.set_override(&mapped_key, parse_env_value(value.as_ref()))?;
+                builder = builder.set_override(&mapped_key, parse_env_value(&mapped_key, value.as_ref()))?;
             };
         }
 
@@ -331,22 +337,7 @@ impl Config {
             bail!("Invalid base URL: protocol must be either http or https");
         }
         if base_url.scheme() != "https" {
-            if config.oidc.enabled() {
-                tracing::warn!(
-                    "Base URL is not using HTTPS; the session and OIDC state cookies are sent without the Secure flag"
-                );
-            } else {
-                tracing::warn!("Base URL is not using HTTPS");
-            }
-        }
-        if config.oidc.enabled() {
-            let issuer = config.oidc.issuer.as_deref().expect("checked by enabled()");
-            let issuer_url = Url::from_str(issuer).context("Invalid oidc.issuer")?;
-            if !is_https_or_loopback(&issuer_url) {
-                bail!(
-                    "Invalid oidc.issuer: must use https (the client secret, authorization code and ID token travel over it); http is allowed only for localhost"
-                );
-            }
+            tracing::warn!("Base URL is not using HTTPS");
         }
         if config.listen.is_some() && config.port.is_some() {
             tracing::warn!(
@@ -364,24 +355,17 @@ impl Config {
         if config.rate_limit.auth_burst == 0 || config.rate_limit.event_burst == 0 {
             bail!("Invalid rate_limit: auth_burst and event_burst must be greater than 0");
         }
-        if config.use_forward_headers && config.trusted_proxies.is_empty() {
-            tracing::warn!(
-                "use_forward_headers is on but trusted_proxies is empty; the rate limiter keys on the TCP peer, so every client behind a proxy shares one bucket. List your proxies in trusted_proxies."
-            );
+        if config.limits.report_max_concurrency == 0 || config.limits.report_max_concurrency > 10 {
+            bail!("Invalid limits.report_max_concurrency: must be between 1 and 10");
         }
-        if config.oidc.registration == OidcRegistration::DomainAllowlist {
-            if config.oidc.allowed_domains.is_empty() {
-                bail!("oidc.registration = \"domain_allowlist\" requires a non-empty oidc.allowed_domains");
-            }
-            if !config.oidc.scopes.iter().any(|s| s == "email") {
-                bail!(
-                    "oidc.registration = \"domain_allowlist\" requires the \"email\" scope in oidc.scopes to read the verified email"
-                );
-            }
-        } else if !config.oidc.allowed_domains.is_empty() {
-            tracing::warn!(
-                "oidc.allowed_domains is set but oidc.registration is not \"domain_allowlist\"; the list is ignored"
-            );
+        if config.limits.report_timeout_seconds == 0
+            || config.limits.report_max_range_days <= 0
+            || config.limits.report_max_dimension_results == 0
+            || config.limits.report_max_datapoints == 0
+            || config.limits.report_max_filters == 0
+            || config.limits.report_max_filter_value_bytes == 0
+        {
+            bail!("Invalid report limit: values must be greater than zero");
         }
 
         Ok(config)
@@ -412,8 +396,15 @@ fn is_https_or_loopback(url: &Url) -> bool {
 
 fn map_env_key(key: &str) -> Option<String> {
     let key = key.strip_prefix("LIWAN_")?.to_ascii_lowercase();
-    const NESTED_PREFIXES: &[(&str, &str)] =
-        &[("maxmind_", "geoip.maxmind_"), ("duckdb_", "duckdb."), ("oidc_", "oidc."), ("rate_limit_", "rate_limit.")];
+    if key == "geoip_headers" {
+        return Some("geoip.headers".to_string());
+    }
+    const NESTED_PREFIXES: &[(&str, &str)] = &[
+        ("maxmind_", "geoip.maxmind_"),
+        ("duckdb_", "duckdb."),
+        ("limits_", "limits."),
+        ("rate_limit_", "rate_limit."),
+    ];
 
     for (prefix, mapped_prefix) in NESTED_PREFIXES {
         if let Some(rest) = key.strip_prefix(prefix) {
@@ -424,22 +415,24 @@ fn map_env_key(key: &str) -> Option<String> {
     Some(key)
 }
 
-fn parse_env_value(value: &str) -> Value {
-    if let Ok(parsed) = value.parse::<bool>() {
-        Value::from(parsed)
-    } else if let Ok(parsed) = value.parse::<i64>() {
-        Value::from(parsed)
-    } else if let Ok(parsed) = value.parse::<f64>() {
-        Value::from(parsed)
-    } else {
-        Value::from(value.to_string())
+fn parse_env_value(key: &str, value: &str) -> Value {
+    if ["trusted_headers", "trusted_proxies", "geoip.headers"].contains(&key) && value.contains(',') {
+        return Value::from(value.split(',').map(str::trim).collect::<Vec<_>>());
     }
+
+    value
+        .parse::<bool>()
+        .ok()
+        .map(Value::from)
+        .or_else(|| value.parse::<i64>().ok().map(Value::from))
+        .or_else(|| value.parse::<f64>().ok().map(Value::from))
+        .unwrap_or_else(|| Value::from(value.to_string()))
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::utils::ip_headers::{TrustedHeader, TrustedProxy};
+    use crate::utils::ip_headers::{ClientIpHeaderSource, ClientIpProvider, TrustedProxy};
     use tempfile::TempDir;
 
     fn temp_config(name: &str, content: &str) -> (TempDir, String) {
@@ -467,6 +460,8 @@ mod test {
             ("GEOIP_MAXMIND_EDITION", "test3"),
             ("LIWAN_DUCKDB_MEMORY_LIMIT", "2GB"),
             ("LIWAN_DUCKDB_THREADS", "4"),
+            ("LIWAN_LIMITS_REPORT_MAX_CONCURRENCY", "6"),
+            ("LIWAN_LIMITS_REPORT_TIMEOUT_SECONDS", "45"),
             ("LIWAN_MAXMIND_LICENSE_KEY", "test"),
             ("LIWAN_MAXMIND_ACCOUNT_ID", "test"),
             ("LIWAN_MAXMIND_DB_PATH", "test"),
@@ -476,13 +471,15 @@ mod test {
 
         assert_eq!(config.geoip.maxmind_edition, "test".to_string());
         assert_eq!(config.geoip.maxmind_license_key, Some("test".to_string()));
-        assert_eq!(config.geoip.maxmind_account_id, Some("test".to_string()));
+        assert_eq!(config.geoip.maxmind_account_id, Some(MaxMindAccountId::String("test".to_string())));
         assert_eq!(config.geoip.maxmind_db_path, Some("test".to_string()));
         assert_eq!(config.base_url, "http://localhost:8081");
         assert_eq!(config.data_dir, "./liwan-test-data");
         assert_eq!(config.listen_addr(), "0.0.0.0:9042");
         assert_eq!(config.duckdb.memory_limit, Some("2GB".to_string()));
         assert_eq!(config.duckdb.threads, Some(NonZeroU16::new(4).unwrap()));
+        assert_eq!(config.limits.report_max_concurrency, 6);
+        assert_eq!(config.limits.report_timeout_seconds, 45);
     }
 
     #[test]
@@ -503,6 +500,26 @@ mod test {
         assert_eq!(config.base_url, "http://localhost:8081");
         assert_eq!(config.data_dir, "./liwan-test-data");
         assert_eq!(config.listen_addr(), "0.0.0.0:9042");
+        assert_eq!(config.trusted_headers, default_trusted_headers());
+        assert_eq!(Config::default().trusted_headers, default_trusted_headers());
+        assert_eq!(config.trusted_proxies, default_trusted_proxies());
+        assert_eq!(Config::default().trusted_proxies, default_trusted_proxies());
+    }
+
+    #[test]
+    fn test_empty_proxy_config_overrides_defaults() {
+        let (_temp_dir, config_path) = temp_config(
+            "empty-proxies.config.toml",
+            r#"
+                trusted_headers = []
+                trusted_proxies = []
+            "#,
+        );
+
+        let config = Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
+
+        assert!(config.trusted_headers.is_empty());
+        assert!(config.trusted_proxies.is_empty());
     }
 
     #[test]
@@ -537,13 +554,18 @@ mod test {
         let config = Config::load(None, env).expect("failed to load config");
         assert_eq!(config.data_dir, "/data");
         assert_eq!(config.base_url, "https://example.com");
-        assert_eq!(config.geoip.maxmind_account_id, Some("123".to_string()));
-        assert_eq!(config.trusted_headers, vec![TrustedHeader::XForwardedFor, TrustedHeader::Forwarded]);
+        assert_eq!(config.geoip.maxmind_account_id, Some(MaxMindAccountId::Number(123)));
         assert_eq!(
-            config.trusted_proxies,
-            vec![TrustedProxy::Ip("127.0.0.1".parse().unwrap()), TrustedProxy::Cidr("10.0.0.0/8".parse().unwrap())]
+            config.trusted_headers.as_ref(),
+            &[
+                ClientIpHeaderSource::Header("x-forwarded-for".to_string()),
+                ClientIpHeaderSource::Header("forwarded".to_string())
+            ]
         );
-        assert!(config.use_forward_headers);
+        assert_eq!(
+            config.trusted_proxies.as_ref(),
+            &[TrustedProxy::Ip("127.0.0.1".parse().unwrap()), TrustedProxy::Cidr("10.0.0.0/8".parse().unwrap())]
+        );
     }
 
     #[test]
@@ -573,160 +595,66 @@ mod test {
     #[test]
     fn test_env_custom_trusted_header() {
         let config = Config::load(None, vec![("LIWAN_TRUSTED_HEADERS", "X_CLIENT_IP")]).expect("failed to load config");
-        assert_eq!(config.trusted_headers, vec![TrustedHeader::Other("x-client-ip".to_string())]);
+        assert_eq!(config.trusted_headers.as_ref(), &[ClientIpHeaderSource::Header("x-client-ip".to_string())]);
     }
 
     #[test]
-    fn test_oidc_config() {
+    fn test_wildcard_trusted_proxy() {
+        let env_config = Config::load(None, [("LIWAN_TRUSTED_PROXIES", "*")]).expect("failed to load config");
+        assert_eq!(env_config.trusted_proxies.as_ref(), &[TrustedProxy::All]);
+
+        let (_temp_dir, config_path) = temp_config("wildcard-proxy.config.toml", "trusted_proxies = \"*\"");
+        let file_config =
+            Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
+        assert_eq!(file_config.trusted_proxies.as_ref(), &[TrustedProxy::All]);
+    }
+
+    #[test]
+    fn test_header_presets_and_geoip_mappings() {
         let (_temp_dir, config_path) = temp_config(
-            "liwan-oidc.config.toml",
+            "headers.config.toml",
             r#"
-                base_url = "https://example.com"
-                [oidc]
-                issuer = "https://accounts.example.com"
-                client_id = "liwan"
+                trusted_headers = ["cloudflare", "fastly", "fly", "akamai", "X-Client-IP"]
+
+                [geoip]
+                headers = ["cloudflare", { country = "X-Country", city = "X-City" }]
             "#,
         );
-        let env = vec![("LIWAN_OIDC_CLIENT_SECRET", "shhh")];
-        let config = Config::load(Some(config_path), env).expect("failed to load config");
-        assert!(config.oidc.enabled());
-        assert_eq!(config.oidc.issuer.as_deref(), Some("https://accounts.example.com"));
-        assert_eq!(config.oidc.client_secret.as_deref(), Some("shhh"));
-        assert_eq!(config.oidc.scopes, vec!["openid", "email", "profile"]);
+
+        let config = Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
         assert_eq!(
-            config.oidc.redirect_uri("https://example.com"),
-            "https://example.com/api/dashboard/auth/oidc/callback"
+            config.trusted_headers.as_ref(),
+            &[
+                ClientIpHeaderSource::Provider(ClientIpProvider::Cloudflare),
+                ClientIpHeaderSource::Provider(ClientIpProvider::Fastly),
+                ClientIpHeaderSource::Provider(ClientIpProvider::Fly),
+                ClientIpHeaderSource::Provider(ClientIpProvider::Akamai),
+                ClientIpHeaderSource::Header("x-client-ip".to_string())
+            ]
+        );
+        assert_eq!(config.geoip.headers.len(), 2);
+        assert_eq!(
+            config.geoip.headers[0],
+            GeoIpHeaderSource::Provider(crate::utils::ip_headers::GeoIpProvider::Cloudflare)
+        );
+        assert_eq!(
+            config.geoip.headers[1],
+            GeoIpHeaderSource::Mapping(crate::utils::ip_headers::GeoIpHeaderMapping {
+                country: "X-Country".to_string(),
+                city: "X-City".to_string(),
+            })
         );
     }
 
-    fn oidc_config_with_issuer(issuer: &str) -> Result<Config> {
-        Config::load(
-            None,
-            vec![
-                ("LIWAN_OIDC_ISSUER", issuer),
-                ("LIWAN_OIDC_CLIENT_ID", "liwan"),
-                ("LIWAN_OIDC_CLIENT_SECRET", "shhh"),
-            ],
-        )
-    }
-
     #[test]
-    fn test_oidc_issuer_rejects_plain_http() {
-        let err = oidc_config_with_issuer("http://idp.example").unwrap_err();
-        assert!(err.to_string().contains("oidc.issuer"), "got: {err}");
-    }
-
-    #[test]
-    fn test_oidc_issuer_allows_localhost_http() {
-        assert!(oidc_config_with_issuer("http://localhost:4444").is_ok());
-    }
-
-    #[test]
-    fn test_oidc_issuer_allows_loopback_ip_http() {
-        assert!(oidc_config_with_issuer("http://127.0.0.1:4444").is_ok());
-        assert!(oidc_config_with_issuer("http://[::1]:4444").is_ok());
-    }
-
-    #[test]
-    fn test_oidc_issuer_allows_https() {
-        assert!(oidc_config_with_issuer("https://accounts.example.com").is_ok());
-    }
-
-    #[test]
-    fn test_oidc_disabled_by_default() {
-        let config = Config::load(None, Vec::<(String, String)>::new()).expect("failed to load config");
-        assert!(!config.oidc.enabled());
-        assert_eq!(config.oidc.registration, OidcRegistration::Open);
-        assert!(config.oidc.allowed_domains.is_empty());
-    }
-
-    #[test]
-    fn test_oidc_allowed_domains_toml_normalized() {
-        let (_temp_dir, config_path) = temp_config(
-            "liwan-allowlist.config.toml",
-            r#"
-                base_url = "https://example.com"
-                [oidc]
-                issuer = "https://accounts.example.com"
-                client_id = "liwan"
-                client_secret = "shhh"
-                registration = "domain_allowlist"
-                allowed_domains = [" Example.COM", "acme.org.", ""]
-            "#,
-        );
+    fn test_trusted_headers_serialization() {
+        let (_temp_dir, config_path) = temp_config("headers.config.toml", "trusted_headers = \"fly\"");
         let config = Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
-        assert_eq!(config.oidc.registration, OidcRegistration::DomainAllowlist);
-        assert_eq!(config.oidc.allowed_domains, vec!["example.com".to_string(), "acme.org".to_string()]);
-    }
 
-    #[test]
-    fn test_oidc_allowed_domains_env_comma_separated() {
-        let (_temp_dir, config_path) = temp_config(
-            "liwan-allowlist-env.config.toml",
-            r#"
-                base_url = "https://example.com"
-                [oidc]
-                issuer = "https://accounts.example.com"
-                client_id = "liwan"
-                client_secret = "shhh"
-                registration = "domain_allowlist"
-            "#,
-        );
-        let env = vec![("LIWAN_OIDC_ALLOWED_DOMAINS", "example.com,acme.org")];
-        let config = Config::load(Some(config_path), env).expect("failed to load config");
-        assert_eq!(config.oidc.allowed_domains, vec!["example.com".to_string(), "acme.org".to_string()]);
-    }
-
-    #[test]
-    fn test_oidc_allowlist_empty_domains_errors() {
-        let (_temp_dir, config_path) = temp_config(
-            "liwan-allowlist-empty.config.toml",
-            r#"
-                base_url = "https://example.com"
-                [oidc]
-                issuer = "https://accounts.example.com"
-                client_id = "liwan"
-                client_secret = "shhh"
-                registration = "domain_allowlist"
-            "#,
-        );
-        assert!(Config::load(Some(config_path), Vec::<(String, String)>::new()).is_err());
-    }
-
-    #[test]
-    fn test_oidc_allowlist_without_email_scope_errors() {
-        let (_temp_dir, config_path) = temp_config(
-            "liwan-allowlist-noscope.config.toml",
-            r#"
-                base_url = "https://example.com"
-                [oidc]
-                issuer = "https://accounts.example.com"
-                client_id = "liwan"
-                client_secret = "shhh"
-                registration = "domain_allowlist"
-                allowed_domains = ["example.com"]
-                scopes = ["openid", "profile"]
-            "#,
-        );
-        assert!(Config::load(Some(config_path), Vec::<(String, String)>::new()).is_err());
-    }
-
-    #[test]
-    fn test_oidc_allowed_domains_ignored_when_open() {
-        let (_temp_dir, config_path) = temp_config(
-            "liwan-allowlist-open.config.toml",
-            r#"
-                base_url = "https://example.com"
-                [oidc]
-                issuer = "https://accounts.example.com"
-                client_id = "liwan"
-                client_secret = "shhh"
-                allowed_domains = ["example.com"]
-            "#,
-        );
-        let config = Config::load(Some(config_path), Vec::<(String, String)>::new()).expect("failed to load config");
-        assert_eq!(config.oidc.registration, OidcRegistration::Open);
-        assert_eq!(config.oidc.allowed_domains, vec!["example.com".to_string()]);
+        assert_eq!(config.trusted_headers.as_ref(), &[ClientIpHeaderSource::Provider(ClientIpProvider::Fly)]);
+        let serialized = serde_json::to_value(config).expect("failed to serialize config");
+        assert!(serialized.get("trusted_headers").is_some());
+        assert!(serialized.get("client_ip_headers").is_none());
     }
 
     #[test]
@@ -737,5 +665,22 @@ mod test {
         assert!(config.geoip.maxmind_license_key.is_none());
         assert_eq!(config.base_url, "http://localhost:9042");
         assert_eq!(config.listen_addr(), "0.0.0.0:9042");
+        assert_eq!(config.trusted_headers, default_trusted_headers());
+        assert_eq!(config.limits.report_max_concurrency, 8);
+        assert_eq!(config.limits.report_timeout_seconds, 30);
+        assert_eq!(config.limits.report_max_range_days, 3660);
+        assert_eq!(config.limits.report_max_dimension_results, 1000);
+        assert_eq!(config.limits.report_max_datapoints, 2000);
+        assert_eq!(config.limits.report_max_filters, 20);
+        assert_eq!(config.limits.report_max_filter_value_bytes, 2048);
+    }
+
+    #[test]
+    fn test_invalid_report_limits() {
+        let error = Config::load(None, [("LIWAN_LIMITS_REPORT_TIMEOUT_SECONDS", "0")]).unwrap_err();
+        assert!(error.to_string().contains("values must be greater than zero"));
+
+        let error = Config::load(None, [("LIWAN_LIMITS_REPORT_MAX_CONCURRENCY", "11")]).unwrap_err();
+        assert!(error.to_string().contains("must be between 1 and 10"));
     }
 }

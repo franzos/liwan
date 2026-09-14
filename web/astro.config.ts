@@ -42,9 +42,25 @@ export default defineConfig({
 	fonts: [
 		{
 			provider: fontProviders.fontsource(),
+			name: "Stack Sans Text",
+			cssVariable: "--font-stack-sans-text",
+			weights: ["200 700"],
+			styles: ["normal"],
+			subsets: ["latin", "latin-ext"],
+		},
+		{
+			provider: fontProviders.fontsource(),
 			name: "Stack Sans Headline",
 			cssVariable: "--font-stack-sans-headline",
 			weights: ["200 700"],
+			styles: ["normal"],
+			subsets: ["latin", "latin-ext"],
+		},
+		{
+			provider: fontProviders.fontsource(),
+			name: "Google Sans",
+			cssVariable: "--font-google-sans",
+			weights: ["400 500 700"],
 			styles: ["normal"],
 			subsets: ["latin", "latin-ext"],
 		},
@@ -74,8 +90,5 @@ export default defineConfig({
 	],
 	redirects: {
 		"/settings": "/settings/projects",
-	},
-	experimental: {
-		rustCompiler: true,
 	},
 });

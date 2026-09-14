@@ -118,6 +118,37 @@ These come from upstream `main` past the `v1.5.0` tag and ship in this fork's bu
 - Fixed the account settings form to avoid React form action runtime errors
 - Documentation for collected data, collection settings, cookie banners, and projects/entities, plus general docs-site updates
 
+> The `liwan-tracker` npm package is intended for current Liwan server releases. Its network protocol may change between Liwan versions. When it does, update the npm tracker alongside Liwan. If you use the tracker script served by Liwan itself, it already uses the matching internal tracker version.
+
+## [v1.7.0] - 2026-09-13
+
+### ⚠️ Breaking Changes
+
+Client IP detection now defaults to `X-Forwarded-For` from IPv4 and IPv6 loopback proxies only. Use `trusted_headers` (`LIWAN_TRUSTED_HEADERS`) to configure different headers and `trusted_proxies` (`LIWAN_TRUSTED_PROXIES`) to configure other proxy addresses or networks.
+
+For Docker deployments where the reverse proxy connects to Liwan through a Docker bridge, add the bridge subnet to `trusted_proxies`, for example `trusted_proxies = ["172.17.0.0/16"]`. If only trusted systems can connect to Liwan over an isolated network, you can set `trusted_proxies = "*"` instead.
+
+Without this configuration, forwarded client addresses from these proxies are ignored. This affects visitor grouping, GeoIP lookup, and rate limits for login and event requests. See the [configuration reference](https://liwan.dev/reference/configuration/) for details.
+
+### Features
+
+- Added external authentication with OpenID Connect, Google, and Microsoft Entra ID, including optional user creation and provider access restrictions
+- Improved visit duration accuracy by tracking page exits
+- Added client IP header presets for Akamai, Cloudflare, CloudFront, Fastly, and Fly
+- Added GeoIP header mappings and presets for Akamai, Cloudflare, CloudFront, Netlify, and Vercel, with MaxMind results taking precedence when available
+- Added `*` support for `trusted_proxies` to trust forwarding headers from any direct peer
+- Tracker requests now avoid CORS preflight requests by sending JSON as `text/plain` and the event API accepts tracker JSON regardless of content type
+
+### Security
+
+- Added configurable resource limits for reports
+- Rate limits now use configured client IP headers when requests come from a trusted reverse proxy
+- Onboarding tokens are now validated in constant time and consumed atomically when creating the initial administrator
+
+### Other
+
+- Removed the redundant `use_forward_headers` option
+
 ## [v1.6.0] - 2026-06-20
 
 ### Features

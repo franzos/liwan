@@ -4,12 +4,16 @@ use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use chrono::{DateTime, Local, NaiveTime, TimeZone, Utc};
 use duckdb::{Connection, Result as DuckResult, params};
+use futures_lite::{StreamExt, future};
 use rand::distr::{SampleString, StandardUniform};
 use tokio::sync::mpsc::Receiver;
+use tokio_util::time::DelayQueue;
 
-use crate::app::models::{Event, GeoDetail, ResolvedCollectionSettings, event_params};
+use crate::app::models::{Event, EventExit, GeoDetail, ResolvedCollectionSettings, event_params};
 use crate::app::{DuckDBPool, SqlitePool};
 use crate::utils::duckdb::{ParamVec, repeat_vars};
+
+const EVENT_EXIT_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct LiwanEvents {
@@ -148,6 +152,41 @@ impl LiwanEvents {
         Ok(())
     }
 
+    /// Process exit updates after a short delay so queued events can reach shared storage first.
+    pub async fn process_exits(&self, mut exits_rx: Receiver<EventExit>) -> Result<()> {
+        let mut pending = DelayQueue::new();
+        let mut channel_closed = false;
+
+        loop {
+            if channel_closed && pending.is_empty() {
+                tracing::info!("Event exit channel closed, stopping event exit processing");
+                return Ok(());
+            }
+
+            tokio::select! {
+                exit = exits_rx.recv(), if !channel_closed => match exit {
+                    Some(exit) => {
+                        pending.insert(exit, EVENT_EXIT_DELAY);
+                    }
+                    None => channel_closed = true,
+                },
+                Some(expired) = pending.next(), if !pending.is_empty() => {
+                    let mut exits = vec![expired.into_inner()];
+                    while let Some(Some(expired)) = future::poll_once(pending.next()).await {
+                        exits.push(expired.into_inner());
+                    }
+
+                    let count = exits.len();
+                    let events = self.clone();
+                    match tokio::task::spawn_blocking(move || events.update_exits(exits)).await? {
+                        Ok(matched) => tracing::debug!(count, matched, "Processed event exits"),
+                        Err(err) => tracing::error!(?err, "Failed to process event exits"),
+                    }
+                }
+            }
+        }
+    }
+
     fn process_events_sync(&self, mut events: Receiver<Event>) -> Result<()> {
         let mut buffer = Vec::with_capacity(1024);
         let conn = self.duckdb.clone();
@@ -188,6 +227,15 @@ impl LiwanEvents {
                 _ => tracing::debug!("Processed {} events", count),
             }
         }
+    }
+
+    fn update_exits(&self, exits: Vec<EventExit>) -> Result<usize> {
+        let conn = self.duckdb.get().context("Failed to get DuckDB connection")?;
+        let mut matched = 0;
+        for exit in exits {
+            matched += usize::from(update_event_exit(&conn, &exit)?);
+        }
+        Ok(matched)
     }
 
     /// Preview or apply collection-setting pruning for a single entity
@@ -256,12 +304,14 @@ impl LiwanEvents {
         }
 
         if !settings.track_sessions {
-            let sql = "entity_id = ? and (time_from_last_event is not null or time_to_next_event is not null)";
+            let sql = "entity_id = ? and (time_from_last_event is not null or time_to_next_event is not null or exited_at is not null)";
             stats.cleared_session_events =
                 count_rows(&conn, &format!("select count(*) from events where {sql}"), params![entity_id])?;
             if !dry_run {
                 conn.execute(
-                    &format!("update events set time_from_last_event = null, time_to_next_event = null where {sql}"),
+                    &format!(
+                        "update events set time_from_last_event = null, time_to_next_event = null, exited_at = null where {sql}"
+                    ),
                     params![entity_id],
                 )?;
             }
@@ -292,6 +342,47 @@ fn count_rows(conn: &Connection, sql: &str, params: impl duckdb::Params) -> Duck
 
 #[cfg(feature = "import")]
 pub const IMPORTED_VISITOR_PREFIX: &str = "i_";
+
+fn update_event_exit(conn: &Connection, exit: &EventExit) -> DuckResult<bool> {
+    let sql = "--sql
+        update events
+        set exited_at = greatest(
+            coalesce(exited_at, created_at),
+            least($exited_at::timestamp, created_at + interval '30 minutes')
+        )
+        where
+            entity_id = $entity_id and
+            visitor_group_id = $visitor_group_id and
+            event = $event and
+            fqdn is not distinct from $fqdn and
+            path is not distinct from $path and
+            time_to_next_event is null and
+            created_at = (
+                select max(candidate.created_at)
+                from events candidate
+                where
+                    candidate.entity_id = $entity_id and
+                    candidate.visitor_group_id = $visitor_group_id and
+                    candidate.event = $event and
+                    candidate.fqdn is not distinct from $fqdn and
+                    candidate.path is not distinct from $path and
+                    candidate.time_to_next_event is null and
+                    candidate.created_at <= $exited_at::timestamp and
+                    candidate.created_at >= $exited_at::timestamp - interval '30 minutes'
+            )";
+    let updated = conn.execute(
+        sql,
+        duckdb::named_params! {
+            "entity_id": &exit.entity_id,
+            "visitor_group_id": &exit.visitor_group_id,
+            "event": &exit.event,
+            "fqdn": &exit.fqdn,
+            "path": &exit.path,
+            "exited_at": exit.created_at,
+        },
+    )?;
+    Ok(updated > 0)
+}
 
 fn update_event_times(conn: &Connection, from_time: DateTime<Utc>, entities: &[String]) -> DuckResult<()> {
     if entities.is_empty() {
@@ -336,11 +427,12 @@ fn update_event_times(conn: &Connection, from_time: DateTime<Utc>, entities: &[S
     Ok(())
 }
 
-#[cfg(all(test, feature = "import"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::Liwan;
     use crate::config::Config;
+    #[cfg(feature = "import")]
     use chrono::TimeZone;
 
     fn event(entity_id: &str, visitor_group_id: &str, created_at: DateTime<Utc>) -> Event {
@@ -349,8 +441,8 @@ mod tests {
             visitor_group_id: visitor_group_id.to_string(),
             event: "pageview".to_string(),
             created_at,
-            fqdn: None,
-            path: None,
+            fqdn: Some("example.com".to_string()),
+            path: Some("/docs".to_string()),
             referrer: None,
             platform: None,
             browser: None,
@@ -368,11 +460,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "import")]
     fn t0() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2023, 6, 1, 10, 0, 0).unwrap()
     }
 
     /// (visitor_group_id, time_from_last_event, time_to_next_event) in seconds, ordered by created_at, rowid
+    #[cfg(feature = "import")]
     fn intervals(conn: &Connection, entity_id: &str) -> Vec<(String, Option<f64>, Option<f64>)> {
         let mut stmt = conn
             .prepare(
@@ -384,6 +478,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "import")]
     fn recompute_spans_batches_without_phantom_boundaries() {
         let app = Liwan::new_memory(Config::default()).unwrap();
         let start = t0();
@@ -414,6 +509,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "import")]
     fn recompute_same_second_events_is_deterministic() {
         let app = Liwan::new_memory(Config::default()).unwrap();
         let start = t0();
@@ -442,6 +538,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "import")]
     fn recompute_leaves_non_imported_rows_untouched() {
         let app = Liwan::new_memory(Config::default()).unwrap();
         let start = t0();
@@ -463,6 +560,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "import")]
     fn delete_imported_after_only_deletes_newer_imported_rows() {
         let app = Liwan::new_memory(Config::default()).unwrap();
         let start = t0();
@@ -489,5 +587,43 @@ mod tests {
             vec!["i_visitor", "i_visitor", "iDecoyVisitor00", "LiveVisitor00000"]
         );
         assert_eq!(intervals(&conn, "other").len(), 1);
+    }
+
+    #[test]
+    fn exit_updates_only_the_latest_event_without_a_next_event() {
+        let app = Liwan::new_memory(Config::default()).expect("failed to create app");
+        let first = Utc::now() - chrono::Duration::minutes(2);
+        let second = first + chrono::Duration::minutes(1);
+        app.events
+            .append(vec![event("entity-1", "visitor-1", first), event("entity-1", "visitor-1", second)].into_iter())
+            .expect("failed to append events");
+
+        let conn = app.events_conn().expect("failed to get event connection");
+        let matched = update_event_exit(
+            &conn,
+            &EventExit {
+                entity_id: "entity-1".to_string(),
+                visitor_group_id: "visitor-1".to_string(),
+                event: "pageview".to_string(),
+                created_at: second + chrono::Duration::seconds(15),
+                fqdn: Some("example.com".to_string()),
+                path: Some("/docs".to_string()),
+            },
+        )
+        .expect("failed to update exit");
+
+        assert!(matched);
+        let rows = conn
+            .prepare("select exited_at from events order by created_at")
+            .expect("failed to prepare query")
+            .query_map([], |row| row.get::<_, Option<DateTime<Utc>>>(0))
+            .expect("failed to query exits")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("failed to collect exits");
+        assert_eq!(
+            rows[1].map(|value| value.timestamp_millis()),
+            Some((second + chrono::Duration::seconds(15)).timestamp_millis())
+        );
+        assert_eq!(rows[0], None);
     }
 }

@@ -10,6 +10,10 @@
   margin-bottom: 0.9rem;
 }
 
+.header[data-has-back] {
+  margin-bottom: 1.25rem;
+}
+
 .titleGroup {
   min-width: 0;
   display: flex;
@@ -22,6 +26,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.header[data-has-back] .titleGroup h1 {
+  font-size: 1rem;
 }
 
 .backButton {
@@ -54,6 +62,8 @@
 .description {
   max-width: 46rem;
   margin-bottom: 1rem;
+  font-size: 0.9rem;
+  line-height: 1.35;
 }
 
 .tabs {
@@ -66,51 +76,57 @@
 .tab {
   --pico-background-color: transparent;
   --pico-border-color: transparent;
-  --pico-color: var(--pico-muted-color);
   width: auto;
   margin: 0;
   padding: 0.35rem 0.65rem;
   border: 0;
-  border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
-  color: var(--pico-muted-color);
+  color: color-mix(in srgb, var(--pico-muted-color) 88%, transparent);
   box-shadow: none;
 }
 
 .tab:hover {
   background: transparent;
-  color: var(--pico-h1-color);
+  color: var(--pico-color);
   box-shadow: none;
 }
 
 .tab[data-active],
 .tab[data-selected] {
-  border-bottom-color: var(--pico-primary-hover);
-  color: var(--pico-primary-hover);
+  color: var(--pico-h1-color);
 }
 
 .panel {
-  margin-top: 0.5rem;
+  margin-top: 0.25rem;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  margin-bottom: var(--pico-spacing);
+  margin-bottom: var(--settings-field-margin, 1rem);
 }
 
 .label,
 .legend {
+  font-size: 0.9rem;
   font-weight: 500;
+  line-height: 1.25;
   margin-bottom: 0;
 }
 
 .fieldDescription {
   display: block;
   margin: 0;
-  font-size: 0.875em;
+  font-size: 0.825rem;
+  line-height: 1.3;
+}
+
+.field > input,
+.field > select,
+.field > textarea {
+  margin-bottom: 0;
 }
 
 .fieldset {
@@ -126,6 +142,8 @@
 
 .fieldsetDescription {
   margin-bottom: 0.6rem;
+  font-size: 0.825rem;
+  line-height: 1.3;
 }
 
 .switchField {
@@ -133,7 +151,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: center;
-  margin-bottom: var(--pico-spacing);
+  margin-bottom: 1rem;
 }
 
 .switchText {
@@ -141,6 +159,20 @@
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+}
+
+.form input,
+.form select,
+.form textarea {
+  font-size: 0.9rem;
+}
+
+@media (max-width: 600px) {
+  .form input,
+  .form select,
+  .form textarea {
+    font-size: 1rem;
+  }
 }
 
 .switchRoot {

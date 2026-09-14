@@ -1,6 +1,6 @@
 mod entities;
 mod events;
-mod oidc;
+mod external_auth;
 mod onboarding;
 mod projects;
 pub mod reports;
@@ -12,7 +12,9 @@ pub use entities::LiwanEntities;
 #[cfg(feature = "import")]
 pub use events::IMPORTED_VISITOR_PREFIX;
 pub use events::{LiwanEvents, PruneStats};
-pub use oidc::{LiwanOidc, LiwanOidcState, RegistrationDecision, RejectReason, email_domain, evaluate_registration};
+pub use external_auth::{
+    ExternalAuthLogin, ExternalAuthProvider, ExternalAuthSettings, ExternalAuthStart, LiwanExternalAuth,
+};
 pub use onboarding::LiwanOnboarding;
 pub use projects::LiwanProjects;
 pub use sessions::LiwanSessions;

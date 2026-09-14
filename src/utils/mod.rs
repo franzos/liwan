@@ -8,6 +8,7 @@ pub mod referrer;
 pub mod refinery_duckdb;
 pub mod refinery_sqlite;
 pub mod seed;
+pub mod serde;
 pub mod signals;
 pub mod useragent;
 pub mod validate;

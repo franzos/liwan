@@ -74,8 +74,6 @@ struct UserResponse {
     username: String,
     role: UserRole,
     projects: Vec<String>,
-    email: Option<String>,
-    auth: crate::app::models::AuthMethod,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -250,13 +248,7 @@ async fn get_users(
         .all()
         .http_err("Failed to get users", StatusCode::INTERNAL_SERVER_ERROR)?
         .into_iter()
-        .map(|u| UserResponse {
-            username: u.username.clone(),
-            role: u.role,
-            projects: u.projects.clone(),
-            email: u.email.clone(),
-            auth: u.auth,
-        })
+        .map(|u| UserResponse { username: u.username.clone(), role: u.role, projects: u.projects.clone() })
         .collect();
 
     Ok(([(http::header::CACHE_CONTROL, "private")], Json(UsersResponse { users })).into())
@@ -320,7 +312,7 @@ async fn remove_user(
         http_bail!(StatusCode::FORBIDDEN, "Forbidden")
     }
 
-    if username == session_user.username {
+    if username.eq_ignore_ascii_case(&session_user.username) {
         http_bail!(StatusCode::FORBIDDEN, "Cannot delete own user")
     }
 
@@ -372,7 +364,7 @@ async fn project_create_handler(
             },
             project.entities.as_slice(),
         )
-        .http_err("Failed to create project", StatusCode::INTERNAL_SERVER_ERROR)?;
+        .http_err("Failed to create project", StatusCode::BAD_REQUEST)?;
 
     Ok(empty_response())
 }
@@ -402,7 +394,7 @@ async fn project_update_handler(
     if let Some(entities) = req.entities {
         app.projects
             .update_entities(&project_id, entities.as_slice())
-            .http_err("Failed to update project entities", StatusCode::INTERNAL_SERVER_ERROR)?;
+            .http_err("Failed to update project entities", StatusCode::BAD_REQUEST)?;
     }
 
     Ok(empty_response())
@@ -644,7 +636,7 @@ async fn entity_create_handler(
             &Entity { id: entity.id.clone(), display_name: entity.display_name.clone() },
             entity.projects.as_slice(),
         )
-        .http_err("Failed to create entity", StatusCode::INTERNAL_SERVER_ERROR)?;
+        .http_err("Failed to create entity", StatusCode::BAD_REQUEST)?;
 
     Ok(Json(EntityResponse { id: entity.id, display_name: entity.display_name, projects: Vec::new() }))
 }
@@ -668,7 +660,7 @@ async fn entity_update_handler(
     if let Some(projects) = entity.projects {
         app.entities
             .update_projects(&entity_id, projects.as_slice())
-            .http_err("Failed to update entity projects", StatusCode::INTERNAL_SERVER_ERROR)?;
+            .http_err("Failed to update entity projects", StatusCode::BAD_REQUEST)?;
     }
 
     Ok(empty_response())

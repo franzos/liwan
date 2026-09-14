@@ -1,8 +1,6 @@
 type RuntimeConfig = {
 	baseUrl: string;
 	disableFavicons: boolean;
-	oidcEnabled: boolean;
-	oidcButtonLabel: string | null;
 };
 
 const readConfig = (): RuntimeConfig | undefined => {
@@ -14,12 +12,7 @@ const readConfig = (): RuntimeConfig | undefined => {
 	try {
 		const config = JSON.parse(text) as Partial<RuntimeConfig>;
 		if (typeof config.baseUrl === "string" && typeof config.disableFavicons === "boolean") {
-			return {
-				baseUrl: config.baseUrl,
-				disableFavicons: config.disableFavicons,
-				oidcEnabled: config.oidcEnabled ?? false,
-				oidcButtonLabel: config.oidcButtonLabel ?? null,
-			};
+			return { baseUrl: config.baseUrl, disableFavicons: config.disableFavicons };
 		}
 	} catch {
 		return undefined;

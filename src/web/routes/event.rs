@@ -1,4 +1,4 @@
-use crate::app::models::{GeoDetail, ResolvedCollectionSettings, VisitorGroupMode, hostname_allowed};
+use crate::app::models::{EventExit, GeoDetail, ResolvedCollectionSettings, VisitorGroupMode, hostname_allowed};
 use crate::app::{Liwan, models::Event};
 use crate::config::Config;
 use crate::utils::hash::{visitor_group_id, visitor_group_id_cidr, visitor_group_id_fallback};
@@ -6,12 +6,12 @@ use crate::utils::ingest::{Utm, clean_referrer, extract_utm, normalize_url};
 use crate::utils::referrer::{Referrer, process_referer};
 use crate::utils::useragent;
 use crate::web::RouterState;
-use crate::web::webext::{ApiResult, AxumErrExt, ClientIp, RateLimitKeyExtractor, empty_response};
+use crate::web::webext::{ApiResult, AxumErrExt, ClientIp, ClientIpKeyExtractor, GeoLocationHeaders, empty_response};
 
 use aide::axum::routing::post;
 use aide::axum::{ApiRouter, IntoApiResponse};
 use anyhow::{Context, Result};
-use axum::Json;
+use axum::body::Bytes;
 use axum::extract::State;
 use axum_extra::TypedHeader;
 use chrono::Utc;
@@ -19,16 +19,16 @@ use http::StatusCode;
 use schemars::JsonSchema;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use url::Url;
 
 pub fn router(config: &Config) -> ApiRouter<RouterState> {
     let limiter = GovernorConfigBuilder::default()
-        .key_extractor(RateLimitKeyExtractor::new(config))
         .per_millisecond(config.rate_limit.event_period_ms)
         .burst_size(config.rate_limit.event_burst)
+        .key_extractor(ClientIpKeyExtractor::new(config))
         .finish()
         .expect("valid governor config");
     let governor_limiter = limiter.limiter().clone();
@@ -54,6 +54,8 @@ struct EventRequest {
     referrer: Option<String>,
     screen_width: Option<String>,
     orientation: Option<String>,
+    #[serde(default)]
+    exit: bool,
 }
 
 impl EventRequest {
@@ -93,29 +95,43 @@ impl EventRequest {
     }
 }
 
-static EXISTING_ENTITIES: LazyLock<quick_cache::sync::Cache<String, ()>> =
-    LazyLock::new(|| quick_cache::sync::Cache::new(512));
-
 async fn event_handler(
     state: State<RouterState>,
     ClientIp(ip): ClientIp,
+    geo_headers: GeoLocationHeaders,
     TypedHeader(user_agent): TypedHeader<headers::UserAgent>,
-    Json(event): Json<EventRequest>,
+    event: Bytes,
 ) -> ApiResult<impl IntoApiResponse> {
+    // we accept any content type, so we need to manually parse the body as JSON
+    let event: EventRequest =
+        serde_json::from_slice(&event).context("invalid json").http_err("invalid json", StatusCode::BAD_REQUEST)?;
     let url = Url::from_str(&event.url).context("invalid url").http_err("invalid url", StatusCode::BAD_REQUEST)?;
     let app = state.app.clone();
     let events = state.events.clone();
     event.validate().context("invalid event").http_err("invalid event", StatusCode::BAD_REQUEST)?;
 
-    // run the event processing in the background
-    let res = tokio::task::spawn_blocking(move || process_event(app, event, url, ip, user_agent))
+    // blocking a bit to give some slight backpressure to the caller
+    let res = tokio::task::spawn_blocking(move || process_event(app, event, url, ip, geo_headers, user_agent))
         .await
         .http_status(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match res {
-        Ok(Some(event)) => {
+        Ok(Some((event, false))) => {
             if events.send_timeout(event, std::time::Duration::from_secs(2)).await.is_err() {
                 tracing::warn!("Failed to send event, channel full");
+            }
+        }
+        Ok(Some((event, true))) => {
+            let exit = EventExit {
+                entity_id: event.entity_id,
+                visitor_group_id: event.visitor_group_id,
+                event: event.event,
+                created_at: event.created_at,
+                fqdn: event.fqdn,
+                path: event.path,
+            };
+            if state.exits.send_timeout(exit, std::time::Duration::from_secs(2)).await.is_err() {
+                tracing::warn!("Failed to send event exit, channel full");
             }
         }
         // event was filtered out, do nothing
@@ -131,8 +147,10 @@ fn process_event(
     event: EventRequest,
     mut url: Url,
     ip: Option<IpAddr>,
+    geo_headers: GeoLocationHeaders,
     user_agent: headers::UserAgent,
-) -> Result<Option<Event>> {
+) -> Result<Option<(Event, bool)>> {
+    let is_exit = event.exit;
     let referrer = match process_referer(event.referrer.as_deref()) {
         Referrer::Fqdn(fqdn) => Some(fqdn),
         Referrer::Unknown(r) => r,
@@ -141,11 +159,8 @@ fn process_event(
     };
     let referrer = clean_referrer(referrer);
 
-    if EXISTING_ENTITIES.get(&event.entity_id).is_none() {
-        if !app.entities.exists(&event.entity_id).unwrap_or(false) {
-            return Ok(None);
-        }
-        EXISTING_ENTITIES.insert(event.entity_id.clone(), ());
+    if !app.entities.exists(&event.entity_id).unwrap_or(false) {
+        return Ok(None);
     }
 
     let settings = app.settings.resolved_for_entity(&event.entity_id);
@@ -164,24 +179,38 @@ fn process_event(
         return Ok(None);
     }
 
+    if is_exit
+        && (!settings.track_sessions
+            || settings.visitor_group_mode == VisitorGroupMode::RandomPerRequest
+            || ip.is_none())
+    {
+        return Ok(None);
+    }
+
     let visitor_group_id =
         resolve_visitor_group_id(&settings, ip, user_agent.as_str(), &app.events.get_salt()?, &event.entity_id);
+
+    let (country, city) = match settings.track_geo {
+        GeoDetail::None => (None, None),
+        GeoDetail::Country => (geo_headers.country, None),
+        GeoDetail::City => (geo_headers.country, geo_headers.city),
+    };
 
     #[cfg(feature = "geoip")]
     let (country, city) = match settings.track_geo {
         GeoDetail::None => (None, None),
-        GeoDetail::Country => ip
-            .and_then(|ip| app.geoip.lookup(&ip).ok())
-            .map(|lookup| (lookup.country_code, None))
-            .unwrap_or((None, None)),
-        GeoDetail::City => ip
-            .and_then(|ip| app.geoip.lookup(&ip).ok())
-            .map(|lookup| (lookup.country_code, lookup.city))
-            .unwrap_or((None, None)),
+        GeoDetail::Country => {
+            let maxmind_country = ip.and_then(|ip| app.geoip.lookup(&ip).ok()).and_then(|lookup| lookup.country_code);
+            (maxmind_country.or(country), None)
+        }
+        GeoDetail::City => {
+            let lookup = ip.and_then(|ip| app.geoip.lookup(&ip).ok());
+            (
+                lookup.as_ref().and_then(|value| value.country_code.clone()).or(country),
+                lookup.and_then(|value| value.city).or(city),
+            )
+        }
     };
-
-    #[cfg(not(feature = "geoip"))]
-    let (country, city) = (None, None);
 
     let utm = if settings.track_utm_params { extract_utm(&mut url) } else { Utm::default() };
     let (path, fqdn) = normalize_url(url);
@@ -213,7 +242,7 @@ fn process_event(
         return Ok(None);
     }
 
-    Ok(Some(event))
+    Ok(Some((event, is_exit)))
 }
 
 fn resolve_visitor_group_id(
