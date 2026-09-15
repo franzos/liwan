@@ -14,7 +14,7 @@ export const MyAccount = () => {
 	const confirmPasswordId = useId();
 
 	const formRef = useRef<HTMLFormElement>(null);
-	const { role, username, isLoading, authError } = useMe();
+	const { role, username, externalAccount, isLoading, authError } = useMe();
 
 	const { mutate, error } = useMutation({
 		mutationFn: api["/api/dashboard/user/{username}/password"].put,
@@ -69,6 +69,19 @@ export const MyAccount = () => {
 				</p>
 				<Snippet entityId="YOUR_ENTITY_ID" />
 			</article>
+			{externalAccount ? (
+				<article>
+					<h2>Sign-in</h2>
+					<p>
+						You sign in through {externalAccount.provider}, so there is no password to change here.{" "}
+						{externalAccount.manageUrl && (
+							<a href={externalAccount.manageUrl} target="_blank" rel="noreferrer">
+								Manage your account at {externalAccount.provider}
+							</a>
+						)}
+					</p>
+				</article>
+			) : (
 			<article>
 				<form className={styles.password} onSubmit={updatePassword} ref={formRef}>
 					<h2>Update password</h2>
@@ -104,6 +117,7 @@ export const MyAccount = () => {
 					</div>
 				</form>
 			</article>
+			)}
 		</div>
 	);
 };

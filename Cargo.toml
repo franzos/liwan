@@ -1,6 +1,6 @@
 [package]
 name = "liwan"
-version = "1.6.0-fork.3"
+version = "1.7.0-fork.1"
 edition = "2024"
 rust-version = "1.98"
 repository = "https://github.com/explodingcamera/liwan"
@@ -71,6 +71,7 @@ axum-extra = { version = "0.12", default-features = false, features = ["cookie",
 headers = "0.4"
 http = "1.5"
 ipnet = { version = "2.12", features = ["serde"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 oauth2 = { git = "https://github.com/explodingcamera-contrib/oauth2-rs", default-features = false }
 openidconnect = { git = "https://github.com/explodingcamera-contrib/openidconnect-rs", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["charset", "json", "rustls", "stream"] }
@@ -105,7 +106,6 @@ matomo-rs = { version = "0.1", default-features = false, features = ["chrono", "
 axum-test = { version = "21" }
 cookie = { version = "*", default-features = false }
 criterion = { version = "0.8", default-features = false }
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 tempfile = { version = "3" }
 tower = { version = "*", features = ["util"] }
 

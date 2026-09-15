@@ -1,97 +1,53 @@
 use crate::{
     app::{SqlitePool, models::UserRole},
+    config::{Config, GroupsConfig, OidcConfig, ProviderConfig, ProviderKind},
     utils::validate,
 };
+mod forseti;
 mod http;
+mod keys;
+mod logout;
+mod policy;
 mod provider;
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, TransactionBehavior};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use provider::{FlowSecret, Provider};
 
-/// An external authentication provider supported by Liwan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ExternalAuthProvider {
-    Oidc,
-    Google,
-    Microsoft,
-}
+pub use forseti::{MAX_WEBHOOK_BODY, SET_CONTENT_TYPE, WebhookError};
+pub use logout::MAX_LOGOUT_BODY;
+pub use policy::{Rejection, email_domain};
 
-impl ExternalAuthProvider {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Oidc => "oidc",
-            Self::Google => "google",
-            Self::Microsoft => "microsoft",
-        }
-    }
-}
-
-impl TryFrom<String> for ExternalAuthProvider {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self> {
-        match value.as_str() {
-            "oidc" => Ok(Self::Oidc),
-            "google" => Ok(Self::Google),
-            "microsoft" => Ok(Self::Microsoft),
-            _ => bail!("invalid external authentication provider"),
-        }
-    }
-}
-
-/// The persisted configuration for the active external authentication provider.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ExternalAuthSettings {
-    pub enabled: bool,
-    pub provider: ExternalAuthProvider,
-    pub display_name: String,
-    pub client_id: String,
-    pub client_secret: Option<String>,
-    pub issuer_url: Option<String>,
-    pub allowed_domain: Option<String>,
-    pub tenant_id: Option<String>,
-    pub allow_user_creation: bool,
-    pub allow_session_reuse: bool,
-}
-
-impl std::fmt::Debug for ExternalAuthSettings {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ExternalAuthSettings")
-            .field("enabled", &self.enabled)
-            .field("provider", &self.provider)
-            .field("display_name", &self.display_name)
-            .field("client_id", &self.client_id)
-            .field("client_secret_configured", &self.client_secret.is_some())
-            .field("issuer_url", &self.issuer_url)
-            .field("allowed_domain", &self.allowed_domain)
-            .field("tenant_id", &self.tenant_id)
-            .field("allow_user_creation", &self.allow_user_creation)
-            .field("allow_session_reuse", &self.allow_session_reuse)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Everything a verified ID token told us about the person signing in.
+/// `email` is only ever set when the provider marked it verified.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) struct ExternalIdentity {
     provider_key: String,
     subject: String,
-    username_hint: Option<String>,
+    email: Option<String>,
+    preferred_username: Option<String>,
+    name: Option<String>,
+    /// Google's Workspace domain.
+    hd: Option<String>,
+    /// Microsoft's tenant.
+    tid: Option<String>,
+    /// The IdP's session id, for back-channel logout.
+    sid: Option<String>,
+    /// Absent claim is `None`; a present one is the list, however short.
+    groups: Option<Vec<String>>,
 }
 
 const FLOW_LIFETIME: Duration = Duration::from_secs(10 * 60);
 const PROVIDER_CACHE_LIFETIME: Duration = Duration::from_secs(5 * 60);
+/// A browser that starts more login flows than this is not a browser.
+const MAX_PENDING_FLOWS: usize = 256;
 
 /// A newly created provider authorization request.
 #[derive(Debug)]
@@ -105,173 +61,189 @@ pub struct ExternalAuthStart {
 pub struct ExternalAuthLogin {
     pub username: String,
     pub return_to: String,
+    /// The IdP's session id, stored on the session so back-channel logout can
+    /// end this device and no other.
+    pub sid: Option<String>,
+}
+
+/// What a caller needs to tell apart: a name nobody configured, a person the
+/// policy turned away, and everything else.
+#[derive(Debug)]
+pub enum ExternalAuthError {
+    UnknownProvider,
+    Rejected(Rejection),
+    /// A webhook delivery that did not verify. Every one of these is one 400
+    /// without a body; the reason stays in the log.
+    Webhook(WebhookError),
+    Failed(anyhow::Error),
+}
+
+fn webhook_error(reason: impl Into<String>) -> ExternalAuthError {
+    ExternalAuthError::Webhook(WebhookError::Invalid(reason.into()))
+}
+
+impl std::fmt::Display for ExternalAuthError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownProvider => formatter.write_str("no such external authentication provider"),
+            Self::Rejected(rejection) => write!(formatter, "external authentication rejected: {rejection}"),
+            Self::Webhook(error) => write!(formatter, "{error}"),
+            Self::Failed(error) => write!(formatter, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for ExternalAuthError {}
+
+impl From<anyhow::Error> for ExternalAuthError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<Rejection> for ExternalAuthError {
+    fn from(rejection: Rejection) -> Self {
+        Self::Rejected(rejection)
+    }
+}
+
+impl ExternalAuthError {
+    /// The `externalAuthError` code the login page maps to a message.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Rejected(rejection) => rejection.code(),
+            _ => "unavailable",
+        }
+    }
+}
+
+/// What [`LiwanExternalAuth::link`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkOutcome {
+    Linked,
+    UserNotFound,
+    /// Another account already answers to this issuer and subject.
+    SubjectHeldBy(String),
+    /// The holder has a local password, so it is a real account rather than an
+    /// auto-provisioned duplicate, and is not replaced.
+    HolderHasPassword(String),
+}
+
+/// How an account signs in, for the settings page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAccount {
+    pub provider_name: String,
+    pub display_name: String,
+    /// Where the person manages the account at the IdP, when it offers one.
+    pub manage_url: Option<String>,
+}
+
+/// A provider and, for `kind = "forseti"`, the portal's own document.
+struct BuiltProvider {
+    provider: Arc<Provider>,
+    forseti: Option<Arc<forseti::ForsetiConfiguration>>,
 }
 
 struct PendingFlow {
+    provider_name: String,
     provider: Arc<Provider>,
     secret: FlowSecret,
-    settings_fingerprint: blake3::Hash,
     return_to: String,
     expires_at: Instant,
 }
 
 struct CachedProvider {
-    settings_fingerprint: blake3::Hash,
     provider: Arc<Provider>,
+    /// `None` when the portal's document was unreachable or unusable; the
+    /// extras stay off until the next rebuild, but login keeps working.
+    forseti: Option<Arc<forseti::ForsetiConfiguration>>,
     created_at: Instant,
 }
 
 struct RuntimeState {
     http: reqwest::Client,
+    base_url: String,
     redirect_url: String,
-    settings_update: tokio::sync::Mutex<()>,
-    provider: Mutex<Option<CachedProvider>>,
+    providers: BTreeMap<String, ProviderConfig>,
+    cache: Mutex<HashMap<String, CachedProvider>>,
+    cache_lifetime: Duration,
     flows: Mutex<HashMap<String, PendingFlow>>,
+    /// Outlives the provider cache: Forseti's JWKS is good for a day and is
+    /// refetched on a `kid` miss, not on a timer.
+    webhook_jwks: HashMap<String, forseti::WebhookJwks>,
+    /// Shared by the deletion webhook and back-channel logout; the event ids
+    /// cannot collide across the two.
+    seen_events: forseti::JtiCache,
 }
 
-/// Manages external provider settings, login flows, and local identities.
+/// Runs the configured external login flows and owns the local identities they
+/// map onto.
 #[derive(Clone)]
 pub struct LiwanExternalAuth {
     pool: SqlitePool,
+    sessions: super::LiwanSessions,
     runtime: Arc<RuntimeState>,
 }
 
 impl LiwanExternalAuth {
     /// Creates the external authentication service and its restricted HTTP client.
-    pub fn try_new(pool: SqlitePool, base_url: &str) -> Result<Self> {
-        let redirect_url = url::Url::parse(base_url)?.join("/api/dashboard/auth/external/callback")?.to_string();
+    pub fn try_new(pool: SqlitePool, config: &Config) -> Result<Self> {
+        let redirect_url = OidcConfig::redirect_uri(&config.base_url);
+        url::Url::parse(&redirect_url).context("invalid base URL for the external auth redirect")?;
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
             .build()?;
         Ok(Self {
+            sessions: super::LiwanSessions::new(pool.clone()),
             pool,
             runtime: Arc::new(RuntimeState {
                 http,
+                base_url: config.base_url.clone(),
                 redirect_url,
-                settings_update: tokio::sync::Mutex::new(()),
-                provider: Mutex::new(None),
+                webhook_jwks: config
+                    .oidc
+                    .providers
+                    .keys()
+                    .map(|name| (name.clone(), forseti::WebhookJwks::default()))
+                    .collect(),
+                providers: config.oidc.providers.clone(),
+                cache: Mutex::new(HashMap::new()),
+                cache_lifetime: PROVIDER_CACHE_LIFETIME,
                 flows: Mutex::new(HashMap::new()),
+                seen_events: forseti::JtiCache::default(),
             }),
         })
     }
 
-    /// Returns the current external authentication settings.
-    pub fn settings(&self) -> Result<ExternalAuthSettings> {
-        let conn = self.pool.get()?;
-        let (
-            enabled,
-            provider,
-            display_name,
-            client_id,
-            client_secret,
-            issuer_url,
-            allowed_domain,
-            tenant_id,
-            allow_user_creation,
-            allow_session_reuse,
-        ) = conn.query_row(
-            r"select enabled, provider, display_name, client_id, client_secret, issuer_url,
-                      allowed_domain, tenant_id, allow_user_creation, allow_session_reuse
-               from external_auth_settings where id = 1",
-            [],
-            |row| {
-                let provider: String = row.get("provider")?;
-                Ok((
-                    row.get("enabled")?,
-                    provider,
-                    row.get("display_name")?,
-                    row.get("client_id")?,
-                    row.get("client_secret")?,
-                    row.get("issuer_url")?,
-                    row.get("allowed_domain")?,
-                    row.get("tenant_id")?,
-                    row.get("allow_user_creation")?,
-                    row.get("allow_session_reuse")?,
-                ))
-            },
-        )?;
-        Ok(ExternalAuthSettings {
-            enabled,
-            provider: provider.try_into()?,
-            display_name,
-            client_id,
-            client_secret,
-            issuer_url,
-            allowed_domain,
-            tenant_id,
-            allow_user_creation,
-            allow_session_reuse,
-        })
+    /// The configured providers, in config order, for the login page.
+    pub fn providers(&self) -> impl Iterator<Item = (&String, &ProviderConfig)> {
+        self.runtime.providers.iter()
     }
 
-    /// Validates and replaces the external authentication settings.
-    pub async fn update_settings(&self, settings: &ExternalAuthSettings) -> Result<()> {
-        let _guard = self.runtime.settings_update.lock().await;
-        let settings = normalize_settings(settings);
-        let provider = if settings.enabled { Some(Arc::new(self.build_provider(&settings).await?)) } else { None };
-        self.persist_settings(&settings)?;
-        *self.runtime.provider.lock().expect("external auth provider lock poisoned") =
-            provider.map(|provider| CachedProvider {
-                settings_fingerprint: settings_fingerprint(&settings),
-                provider,
-                created_at: Instant::now(),
-            });
-        Ok(())
+    pub fn is_configured(&self) -> bool {
+        !self.runtime.providers.is_empty()
     }
 
-    fn persist_settings(&self, settings: &ExternalAuthSettings) -> Result<()> {
-        let conn = self.pool.get()?;
-        conn.execute(
-            r"update external_auth_settings set
-                   enabled = :enabled,
-                   provider = :provider,
-                   display_name = :display_name,
-                   client_id = :client_id,
-                   client_secret = :client_secret,
-                   issuer_url = :issuer_url,
-                   allowed_domain = :allowed_domain,
-                   tenant_id = :tenant_id,
-                   allow_user_creation = :allow_user_creation,
-                   allow_session_reuse = :allow_session_reuse
-               where id = 1",
-            rusqlite::named_params! {
-                ":enabled": settings.enabled,
-                ":provider": settings.provider.as_str(),
-                ":display_name": settings.display_name,
-                ":client_id": settings.client_id,
-                ":client_secret": settings.client_secret,
-                ":issuer_url": settings.issuer_url,
-                ":allowed_domain": settings.allowed_domain,
-                ":tenant_id": settings.tenant_id,
-                ":allow_user_creation": settings.allow_user_creation,
-                ":allow_session_reuse": settings.allow_session_reuse,
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Returns the callback URL that must be registered with the provider.
+    /// The callback URL that must be registered with every provider.
     pub fn callback_url(&self) -> &str {
         &self.runtime.redirect_url
     }
 
-    /// Starts a short-lived external login flow.
-    pub async fn begin(&self, return_to: String) -> Result<ExternalAuthStart> {
-        let return_to = local_return_path(&return_to).context("invalid return path")?;
-        let settings = self.settings()?;
-        if !settings.enabled {
-            bail!("external authentication is disabled");
+    /// Starts a short-lived external login flow against a named provider.
+    pub async fn begin(&self, provider_name: &str, return_to: &str) -> Result<ExternalAuthStart, ExternalAuthError> {
+        if !self.runtime.providers.contains_key(provider_name) {
+            return Err(ExternalAuthError::UnknownProvider);
         }
-
-        let fingerprint = settings_fingerprint(&settings);
-        let provider = self.provider(&settings, fingerprint).await?;
+        let return_to =
+            local_return_path(return_to).context("invalid return path").map_err(ExternalAuthError::Failed)?;
+        let provider = self.provider(provider_name).await?.provider;
         let authorization = provider.authorize();
 
         let mut flows = self.runtime.flows.lock().expect("external auth flow lock poisoned");
         let now = Instant::now();
         flows.retain(|_, flow| flow.expires_at > now);
-        if flows.len() >= 256
+        if flows.len() >= MAX_PENDING_FLOWS
             && let Some(oldest) = flows.iter().min_by_key(|(_, flow)| flow.expires_at).map(|(state, _)| state.clone())
         {
             flows.remove(&oldest);
@@ -279,9 +251,9 @@ impl LiwanExternalAuth {
         flows.insert(
             authorization.state.clone(),
             PendingFlow {
+                provider_name: provider_name.to_string(),
                 provider,
                 secret: authorization.secret,
-                settings_fingerprint: fingerprint,
                 return_to,
                 expires_at: now + FLOW_LIFETIME,
             },
@@ -290,8 +262,9 @@ impl LiwanExternalAuth {
     }
 
     /// Consumes a login flow and resolves it to a local Liwan account.
-    pub async fn finish(&self, state: &str, code: String) -> Result<ExternalAuthLogin> {
-        // Removing before token exchange makes every callback attempt one-use, including failures.
+    pub async fn finish(&self, state: &str, code: String) -> Result<ExternalAuthLogin, ExternalAuthError> {
+        // Removing before the token exchange makes every callback attempt
+        // one-use, including the ones that fail.
         let flow = self
             .runtime
             .flows
@@ -300,20 +273,47 @@ impl LiwanExternalAuth {
             .remove(state)
             .context("external authentication flow not found or already used")?;
         if flow.expires_at <= Instant::now() {
-            bail!("external authentication flow expired");
+            return Err(anyhow::anyhow!("external authentication flow expired").into());
         }
 
-        self.current_flow_settings(flow.settings_fingerprint)?;
+        // The provider list is fixed at startup, so a flow can only outlive its
+        // own provider through a restart, which also clears the flows.
+        let provider_config =
+            self.runtime.providers.get(&flow.provider_name).ok_or(ExternalAuthError::UnknownProvider)?;
         let identity = flow.provider.complete(code, flow.secret, &self.runtime.http).await?;
 
-        // Provider requests are asynchronous, so policy may have changed while one was in progress.
-        let settings = self.current_flow_settings(flow.settings_fingerprint)?;
-        let username = match self.find_user(&identity.provider_key, &identity.subject)? {
+        policy::evaluate_access(provider_config, &identity).inspect_err(|rejection| {
+            tracing::warn!(
+                provider = %flow.provider_name,
+                subject = %identity.subject,
+                %rejection,
+                "external authentication denied",
+            );
+        })?;
+
+        let existing = self.find_user(&identity.provider_key, &identity.subject)?;
+        policy::evaluate_registration(provider_config.registration, existing.is_some()).inspect_err(|rejection| {
+            tracing::warn!(
+                provider = %flow.provider_name,
+                subject = %identity.subject,
+                %rejection,
+                "external authentication denied",
+            );
+        })?;
+
+        let username = match existing {
             Some(username) => username,
-            None if settings.allow_user_creation => self.create_user(&identity)?,
-            None => bail!("external user creation is disabled"),
+            None => self.create_user(&identity)?,
         };
-        Ok(ExternalAuthLogin { username, return_to: flow.return_to })
+
+        if let Some(groups) = provider_config.groups.as_ref() {
+            self.sync_groups(&username, groups, identity.groups.as_deref().unwrap_or_default())?;
+        }
+
+        // Scoped to the issuer, so two providers cannot hand out the same
+        // session id and end each other's sessions.
+        let sid = identity.sid.as_deref().map(|sid| scoped_sid(&identity.provider_key, sid));
+        Ok(ExternalAuthLogin { username, return_to: flow.return_to, sid })
     }
 
     /// Cancels an in-progress login flow.
@@ -321,50 +321,324 @@ impl LiwanExternalAuth {
         self.runtime.flows.lock().expect("external auth flow lock poisoned").remove(state);
     }
 
-    fn current_flow_settings(&self, fingerprint: blake3::Hash) -> Result<ExternalAuthSettings> {
-        let settings = self.settings()?;
-        if !settings.enabled || settings_fingerprint(&settings) != fingerprint {
-            bail!("external authentication settings changed during login");
-        }
-        Ok(settings)
-    }
+    /// The built provider for a configured name. Discovery runs once per cache
+    /// lifetime, which is also how often the JWKS is refreshed.
+    async fn provider(&self, name: &str) -> Result<BuiltProvider, ExternalAuthError> {
+        let config = self.runtime.providers.get(name).ok_or(ExternalAuthError::UnknownProvider)?;
 
-    async fn provider(&self, settings: &ExternalAuthSettings, fingerprint: blake3::Hash) -> Result<Arc<Provider>> {
-        if let Some(provider) = self
+        if let Some(built) = self
             .runtime
-            .provider
+            .cache
             .lock()
             .expect("external auth provider lock poisoned")
-            .as_ref()
-            .filter(|provider| {
-                provider.settings_fingerprint == fingerprint && provider.created_at.elapsed() < PROVIDER_CACHE_LIFETIME
-            })
-            .map(|provider| provider.provider.clone())
+            .get(name)
+            .filter(|cached| cached.created_at.elapsed() < self.runtime.cache_lifetime)
+            .map(|cached| BuiltProvider { provider: cached.provider.clone(), forseti: cached.forseti.clone() })
         {
-            return Ok(provider);
+            return Ok(built);
         }
 
-        let provider = Arc::new(self.build_provider(settings).await?);
-        *self.runtime.provider.lock().expect("external auth provider lock poisoned") = Some(CachedProvider {
-            settings_fingerprint: fingerprint,
-            provider: provider.clone(),
-            created_at: Instant::now(),
-        });
-        Ok(provider)
+        let provider = Arc::new(Provider::from_config(config, &self.runtime.redirect_url, &self.runtime.http).await?);
+        let forseti = match config.portal_url() {
+            Some(portal_url) => match forseti::fetch(&portal_url, &self.runtime.http).await {
+                Ok(document) => Some(Arc::new(document)),
+                Err(error) => {
+                    // The account link and the deletion webhook go quiet, but
+                    // people can still sign in.
+                    tracing::warn!(provider = %name, %error, "Forseti discovery failed; its extras stay off");
+                    None
+                }
+            },
+            None => None,
+        };
+
+        self.runtime.cache.lock().expect("external auth provider lock poisoned").insert(
+            name.to_string(),
+            CachedProvider { provider: provider.clone(), forseti: forseti.clone(), created_at: Instant::now() },
+        );
+        Ok(BuiltProvider { provider, forseti })
     }
 
-    async fn build_provider(&self, settings: &ExternalAuthSettings) -> Result<Provider> {
-        if settings.client_id.trim().is_empty() {
-            bail!("client ID is required");
+    /// Handles Forseti's `account-purged` security event token.
+    ///
+    /// The account is deleted outright when it only ever signed in through the
+    /// IdP. One with a local password keeps working as a local account; only the
+    /// link goes.
+    pub async fn handle_account_purged(&self, name: &str, body: &[u8]) -> Result<(), ExternalAuthError> {
+        let config = self.runtime.providers.get(name).ok_or(ExternalAuthError::UnknownProvider)?;
+        if config.kind != ProviderKind::Forseti {
+            return Err(ExternalAuthError::UnknownProvider);
         }
-        if settings.client_secret.as_deref().is_none_or(|secret| secret.trim().is_empty()) {
-            bail!("client secret is required");
-        }
-        if settings.display_name.trim().is_empty() {
-            bail!("display name is required");
+        let portal_url = config.portal_url().ok_or(ExternalAuthError::UnknownProvider)?;
+        let token = std::str::from_utf8(body).map_err(|_| webhook_error("body is not valid UTF-8"))?.trim();
+
+        let built = self.provider(name).await?;
+        let jwks_uri = built
+            .forseti
+            .as_ref()
+            .and_then(|document| document.webhook_jwks_uri.clone())
+            .ok_or(ExternalAuthError::UnknownProvider)?;
+        forseti::validate_jwks_uri(&jwks_uri, &portal_url).map_err(|error| webhook_error(format!("{error:#}")))?;
+
+        let kid = forseti::token_kid(token).map_err(ExternalAuthError::Webhook)?;
+        let key = self
+            .runtime
+            .webhook_jwks
+            .get(name)
+            .ok_or(ExternalAuthError::UnknownProvider)?
+            .key_for(&kid, &jwks_uri, &self.runtime.http)
+            .await
+            .map_err(|error| webhook_error(format!("no usable signing key: {error:#}")))?;
+
+        let purged =
+            forseti::verify_account_purged(token, &key, &portal_url, &config.client_id, chrono::Utc::now().timestamp())
+                .map_err(ExternalAuthError::Webhook)?;
+
+        // A retry of a delivery we already applied is a 200, not a second delete.
+        if !self.runtime.seen_events.insert(&format!("purge:{name}:{}", purged.jti)) {
+            tracing::debug!(provider = %name, jti = %purged.jti, "account deletion event already handled");
+            return Ok(());
         }
 
-        Provider::from_settings(settings, &self.runtime.redirect_url, &self.runtime.http).await
+        self.purge_identity(built.provider.provider_key(), &purged.subject)?;
+        Ok(())
+    }
+
+    /// Handles an OpenID Connect back-channel logout token.
+    ///
+    /// With a `sid` this ends the one session the IdP signed out. Without one,
+    /// every session the subject has goes, password logins included: the IdP has
+    /// told us it no longer vouches for that person at all.
+    pub async fn handle_backchannel_logout(&self, name: &str, token: &str) -> Result<(), ExternalAuthError> {
+        let config = self.runtime.providers.get(name).ok_or(ExternalAuthError::UnknownProvider)?;
+        let token = token.trim();
+
+        let mut built = self.provider(name).await?;
+        let (algorithm, kid) =
+            logout::token_header(token, built.provider.signing_algorithms()).map_err(ExternalAuthError::Webhook)?;
+
+        let key = match keys::select(built.provider.jwks(), kid.as_deref(), algorithm) {
+            Some(key) => key,
+            None => {
+                // A key we have never seen means the IdP rotated. Rebuild rather
+                // than refuse a legitimate logout, but keep the cached provider
+                // in place until the replacement is in hand: this is an
+                // unauthenticated caller and logins use the same entry.
+                built = self.rebuild_provider(name).await?;
+                keys::select(built.provider.jwks(), kid.as_deref(), algorithm)
+                    .ok_or_else(|| webhook_error("no provider key matches the logout token"))?
+            }
+        };
+
+        let request = logout::verify_logout_token(
+            token,
+            &key,
+            algorithm,
+            built.provider.provider_key(),
+            &config.client_id,
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(ExternalAuthError::Webhook)?;
+
+        // A retried delivery must not end a session the person has since started.
+        // A token without a `jti` dedupes on its own digest rather than on the
+        // whole token, which would otherwise sit in memory at 16 KiB a time.
+        let event = if request.jti.is_empty() {
+            blake3::hash(token.as_bytes()).to_hex().to_string()
+        } else {
+            request.jti.clone()
+        };
+        if !self.runtime.seen_events.insert(&format!("logout:{name}:{event}")) {
+            tracing::debug!(provider = %name, "back-channel logout already handled");
+            return Ok(());
+        }
+
+        let ended = match request.sid.as_deref() {
+            Some(sid) => self.sessions.delete_by_external_sid(&scoped_sid(built.provider.provider_key(), sid))?,
+            None => {
+                let subject = request.sub.as_deref().expect("verify requires sub or sid");
+                match self.find_user(built.provider.provider_key(), subject)? {
+                    Some(username) => self.sessions.delete_for_user(&username)?,
+                    // Nothing to do: we never had this person, or they are gone.
+                    None => 0,
+                }
+            }
+        };
+        if ended == 0 {
+            // Either the person was already signed out here, or their session
+            // predates the `sid` column, or the IdP sent a `sid` we never stored.
+            tracing::warn!(provider = %name, "back-channel logout matched no session");
+        } else {
+            tracing::info!(provider = %name, ended, "ended sessions on back-channel logout");
+        }
+        Ok(())
+    }
+
+    /// Discards the cached provider only once its replacement is in hand, so an
+    /// unauthenticated caller cannot leave logins without a provider to use.
+    async fn rebuild_provider(&self, name: &str) -> Result<BuiltProvider, ExternalAuthError> {
+        let config = self.runtime.providers.get(name).ok_or(ExternalAuthError::UnknownProvider)?;
+        let provider = Arc::new(Provider::from_config(config, &self.runtime.redirect_url, &self.runtime.http).await?);
+        let forseti = self
+            .runtime
+            .cache
+            .lock()
+            .expect("external auth provider lock poisoned")
+            .get(name)
+            .and_then(|cached| cached.forseti.clone());
+        self.runtime.cache.lock().expect("external auth provider lock poisoned").insert(
+            name.to_string(),
+            CachedProvider { provider: provider.clone(), forseti: forseti.clone(), created_at: Instant::now() },
+        );
+        Ok(BuiltProvider { provider, forseti })
+    }
+
+    /// Attach an IdP identity to an account that already exists, so the next
+    /// sign-in lands on it instead of provisioning a second one. The account
+    /// keeps its role, its projects and, if it has one, its password.
+    ///
+    /// With `replace`, an SSO-provisioned account already holding the subject
+    /// (the usual case: someone signed in before being linked) is deleted along
+    /// with its sessions. One with a local password never is.
+    pub fn link(&self, username: &str, issuer: &str, subject: &str, replace: bool) -> Result<LinkOutcome> {
+        let mut conn = self.pool.get()?;
+        let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if !transaction.prepare_cached("select 1 from users where username = ?")?.exists([username])? {
+            return Ok(LinkOutcome::UserNotFound);
+        }
+
+        let holder: Option<(String, Option<String>)> = transaction
+            .prepare_cached(
+                "select i.username, u.password_hash from external_identities i
+                 join users u on u.username = i.username
+                 where i.provider_key = ? and i.subject = ?",
+            )?
+            .query_row([issuer, subject], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+
+        if let Some((holder, password_hash)) = holder {
+            if holder == username {
+                return Ok(LinkOutcome::Linked);
+            }
+            if !replace {
+                return Ok(LinkOutcome::SubjectHeldBy(holder));
+            }
+            if password_hash.is_some() {
+                return Ok(LinkOutcome::HolderHasPassword(holder));
+            }
+            // The identity row cascades with the user.
+            transaction.execute("delete from users where username = ?", [&holder])?;
+            transaction.execute("delete from sessions where lower(username) = lower(?)", [&holder])?;
+        }
+
+        // `(provider_key, username)` is unique too, so re-linking the same
+        // account to a new subject replaces the old row rather than failing.
+        transaction
+            .execute("delete from external_identities where provider_key = ? and username = ?", [issuer, username])?;
+        transaction.execute(
+            "insert into external_identities (provider_key, subject, username) values (?, ?, ?)",
+            [issuer, subject, username],
+        )?;
+        transaction.commit()?;
+        Ok(LinkOutcome::Linked)
+    }
+
+    /// Removes an identity, and the account with it when that account has no
+    /// other way in.
+    fn purge_identity(&self, provider_key: &str, subject: &str) -> Result<()> {
+        let mut conn = self.pool.get()?;
+        let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let row: Option<(String, Option<String>)> = transaction
+            .query_row(
+                "select i.username, u.password_hash from external_identities i
+                 join users u on u.username = i.username
+                 where i.provider_key = ? and i.subject = ?",
+                [provider_key, subject],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        let Some((username, password_hash)) = row else {
+            tracing::debug!(%provider_key, "account deletion event names an identity we do not have");
+            return Ok(());
+        };
+
+        if password_hash.is_some() {
+            // The account predates SSO or was attached with `link-oidc`. Losing
+            // the IdP should not lose the account.
+            transaction.execute(
+                "delete from external_identities where provider_key = ? and subject = ?",
+                [provider_key, subject],
+            )?;
+            transaction.commit()?;
+            tracing::info!(%username, "unlinked an account whose IdP identity was deleted");
+            return Ok(());
+        }
+
+        // The identity row goes with the user through the cascade.
+        transaction.execute("delete from users where username = ?", [&username])?;
+        transaction.execute("delete from sessions where lower(username) = lower(?)", [&username])?;
+        transaction.commit()?;
+        tracing::info!(%username, "deleted an account whose IdP identity was deleted");
+        Ok(())
+    }
+
+    /// The provider an account signs in through, if it has an identity at all.
+    /// Drives the settings page: an SSO account has no password form, and gets a
+    /// link out to the IdP instead.
+    pub async fn account_for(&self, username: &str) -> Result<Option<ExternalAccount>> {
+        let conn = self.pool.get()?;
+        let provider_key: Option<String> = conn
+            .query_row(
+                "select provider_key from external_identities where username = ? order by provider_key limit 1",
+                [username],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(provider_key) = provider_key else {
+            return Ok(None);
+        };
+
+        // Identities are keyed on the discovered issuer, so a provider that was
+        // renamed still matches; one that was removed falls back to the issuer.
+        let matched = self
+            .runtime
+            .providers
+            .iter()
+            .find(|(_, provider)| provider.issuer_url().is_ok_and(|issuer| same_issuer(&issuer, &provider_key)));
+        let Some((name, provider)) = matched else {
+            // A provider that has since been taken out of the config entirely.
+            return Ok(Some(ExternalAccount {
+                provider_name: provider_key.clone(),
+                display_name: provider_key,
+                manage_url: None,
+            }));
+        };
+
+        // Only Forseti advertises somewhere to send people; for anything else
+        // this would be an IdP round-trip for nothing.
+        let manage_url = if provider.kind == ProviderKind::Forseti {
+            match self.provider(name).await {
+                Ok(built) => built
+                    .forseti
+                    .as_ref()
+                    .and_then(|document| forseti::manage_url(document, &provider.client_id, &self.runtime.base_url)),
+                Err(error) => {
+                    tracing::debug!(provider = %name, %error, "could not resolve the manage-account link");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok(Some(ExternalAccount {
+            provider_name: name.clone(),
+            display_name: provider.display_name().to_string(),
+            manage_url,
+        }))
     }
 
     fn find_user(&self, provider_key: &str, subject: &str) -> Result<Option<String>> {
@@ -397,25 +671,29 @@ impl LiwanExternalAuth {
             return Ok(username);
         }
 
-        let base = username_base(identity.username_hint.as_deref());
-        let hash = blake3::hash(format!("{}\0{}", identity.provider_key, identity.subject).as_bytes()).to_hex();
-        let suffix = &hash[..8];
-        let mut attempt = 0;
-        let username = loop {
-            let candidate = match attempt {
-                0 => base.clone(),
-                1 => format!("{base}-{suffix}"),
-                _ => format!("{base}-{suffix}-{attempt}"),
-            };
-            let exists: bool = transaction.query_row(
-                "select exists(select 1 from users where username = ?)",
-                [&candidate],
-                |row| row.get(0),
-            )?;
-            if !exists && validate::is_valid_username(&candidate) {
-                break candidate;
+        let base = derive_username_base(
+            identity.preferred_username.as_deref(),
+            identity.email.as_deref(),
+            identity.name.as_deref(),
+            &identity.subject,
+        );
+        let username = {
+            let mut exists = transaction.prepare_cached("select 1 from users where username = ? limit 1")?;
+            let mut candidate = base.clone();
+            let mut attempt = 1;
+            loop {
+                if validate::is_valid_username(&candidate) && !exists.exists([&candidate])? {
+                    break candidate;
+                }
+                attempt += 1;
+                if attempt > 10_000 {
+                    bail!("could not allocate a unique username for {base}");
+                }
+                candidate = format!("{base}-{attempt}");
+                if candidate.len() > 64 {
+                    candidate = candidate[candidate.len() - 64..].to_string();
+                }
             }
-            attempt += 1;
         };
 
         transaction.execute(
@@ -429,72 +707,128 @@ impl LiwanExternalAuth {
         transaction.commit()?;
         Ok(username)
     }
-}
 
-fn username_base(hint: Option<&str>) -> String {
-    let hint = hint.unwrap_or("user");
-    let hint = hint.split_once('@').map_or(hint, |(local, _)| local);
-    let mut base = String::new();
-    for character in hint
-        .chars()
-        .filter(|character| character.is_alphanumeric() || matches!(character, '-' | '_'))
-        .flat_map(char::to_lowercase)
-    {
-        if base.len() + character.len_utf8() > 48 {
-            break;
+    /// Writes the role and project access the IdP's groups imply.
+    ///
+    /// Only accounts without a local password are touched: those are entirely
+    /// IdP-managed, so overwriting them on every login is the point. An account
+    /// created locally, or attached with `link-oidc`, keeps whatever an admin
+    /// set — which is what stops the setup admin being demoted by a missing group.
+    fn sync_groups(&self, username: &str, config: &GroupsConfig, groups: &[String]) -> Result<()> {
+        let (role, projects) = policy::resolve_role_and_projects(config, groups);
+
+        let mut conn = self.pool.get()?;
+        let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let known: Vec<String> = {
+            let mut stmt = transaction.prepare_cached("select id from projects")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let (granted, unknown): (Vec<String>, Vec<String>) =
+            projects.into_iter().partition(|project| known.contains(project));
+        if !unknown.is_empty() {
+            tracing::warn!(
+                %username,
+                projects = %unknown.join(", "),
+                "group mapping names projects that do not exist; skipping them",
+            );
         }
-        base.push(character);
+
+        let updated = transaction.execute(
+            "update users set role = ?, projects = ? where username = ? and password_hash is null",
+            rusqlite::params![role.to_string(), granted.join(","), username],
+        )?;
+        transaction.commit()?;
+
+        if updated == 0 {
+            tracing::debug!(%username, "account has a local password; group mapping left it alone");
+        } else {
+            tracing::debug!(%username, %role, projects = granted.len(), "applied group mapping");
+        }
+        Ok(())
     }
 
-    if validate::is_valid_username(&base) { base } else { "user".to_string() }
-}
-
-fn normalize_settings(settings: &ExternalAuthSettings) -> ExternalAuthSettings {
-    let optional = |value: &Option<String>| {
-        value.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()).map(str::to_string)
-    };
-    let client_secret = settings.client_secret.as_ref().filter(|secret| !secret.trim().is_empty()).cloned();
-    let (issuer_url, allowed_domain, tenant_id) = match settings.provider {
-        ExternalAuthProvider::Oidc => (optional(&settings.issuer_url), None, None),
-        ExternalAuthProvider::Google => {
-            (None, optional(&settings.allowed_domain).map(|value| value.to_lowercase()), None)
-        }
-        ExternalAuthProvider::Microsoft => {
-            (None, None, optional(&settings.tenant_id).map(|value| value.to_lowercase()))
-        }
-    };
-    ExternalAuthSettings {
-        enabled: settings.enabled,
-        provider: settings.provider,
-        display_name: settings.display_name.trim().to_string(),
-        client_id: settings.client_id.trim().to_string(),
-        client_secret,
-        issuer_url,
-        allowed_domain,
-        tenant_id,
-        allow_user_creation: settings.allow_user_creation,
-        allow_session_reuse: settings.allow_session_reuse,
+    /// Test-only: read the nonce for a pending flow without consuming it, so a
+    /// test can mint an ID token the flow will accept.
+    #[cfg(any(test, feature = "__dev"))]
+    pub fn peek_nonce(&self, state: &str) -> Option<String> {
+        let flows = self.runtime.flows.lock().expect("external auth flow lock poisoned");
+        flows.get(state).map(|flow| flow.secret.nonce_secret())
     }
 }
 
-fn settings_fingerprint(settings: &ExternalAuthSettings) -> blake3::Hash {
-    let mut hasher = blake3::Hasher::new();
-    for value in [
-        if settings.enabled { "true" } else { "false" },
-        settings.provider.as_str(),
-        &settings.display_name,
-        &settings.client_id,
-        settings.client_secret.as_deref().unwrap_or_default(),
-        settings.issuer_url.as_deref().unwrap_or_default(),
-        settings.allowed_domain.as_deref().unwrap_or_default(),
-        settings.tenant_id.as_deref().unwrap_or_default(),
-        if settings.allow_user_creation { "true" } else { "false" },
-        if settings.allow_session_reuse { "true" } else { "false" },
-    ] {
-        hasher.update(&(value.len() as u64).to_le_bytes());
-        hasher.update(value.as_bytes());
+/// Transliterate to ASCII, lowercase, drop quotes, and reduce every run of
+/// disallowed chars to a single `-`. Underscores are preserved; `-` separates.
+/// May return an empty or short string — the caller decides what to do.
+fn slugify(raw: &str) -> String {
+    let ascii = deunicode::deunicode(raw).to_lowercase();
+    let mut out = String::with_capacity(ascii.len());
+    let mut pending_dash = false;
+    for c in ascii.chars() {
+        match c {
+            '\'' | '"' | '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' => {}
+            'a'..='z' | '0'..='9' | '_' => {
+                if pending_dash && !out.is_empty() {
+                    out.push('-');
+                }
+                pending_dash = false;
+                out.push(c);
+            }
+            _ => pending_dash = true,
+        }
     }
-    hasher.finalize()
+    out
+}
+
+/// Build a candidate Liwan username from the ID token's claims, preferring
+/// preferred_username, then the verified email local-part, then the name, then
+/// the subject. The result is an ASCII slug clamped to 3..=64 chars. Always
+/// returns a string that passes `is_valid_username`.
+fn derive_username_base(
+    preferred_username: Option<&str>,
+    email: Option<&str>,
+    name: Option<&str>,
+    subject: &str,
+) -> String {
+    let candidates = [preferred_username, email.and_then(|e| e.split('@').next()), name];
+
+    let mut base = candidates.into_iter().flatten().map(slugify).find(|s| s.len() >= 3).unwrap_or_default();
+
+    if base.len() < 3 {
+        let sub_slug = slugify(subject);
+        base = if sub_slug.len() >= 3 { sub_slug } else { format!("user-{sub_slug}") };
+    }
+
+    if base.len() > 64 {
+        base.truncate(64);
+        while base.ends_with('-') {
+            base.pop();
+        }
+    }
+    while base.len() < 3 {
+        base.push('0');
+    }
+    base
+}
+
+/// A session id is only unique within its own issuer, so the stored value
+/// carries both. Two providers cannot then end each other's sessions by issuing
+/// the same string. The separator is a control character, which cannot appear in
+/// an issuer URL.
+fn scoped_sid(provider_key: &str, sid: &str) -> String {
+    format!("{provider_key}{SID_SEPARATOR}{sid}")
+}
+
+const SID_SEPARATOR: char = '\u{1f}';
+
+/// Issuers are compared as URLs: the configured string and the one discovery
+/// reported often differ only in a trailing slash.
+fn same_issuer(a: &str, b: &str) -> bool {
+    match (url::Url::parse(a), url::Url::parse(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 fn local_return_path(path: &str) -> Option<String> {
@@ -523,26 +857,101 @@ fn local_return_path(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{app::Liwan, config::Config};
+    use crate::{
+        app::Liwan,
+        config::{Config, GroupsConfig},
+    };
 
-    #[tokio::test]
-    async fn settings_round_trip() {
-        let app = Liwan::new_memory(Config::default()).unwrap();
-        let settings = ExternalAuthSettings {
-            enabled: false,
-            provider: ExternalAuthProvider::Google,
-            display_name: "Google".to_string(),
-            client_id: "client-id".to_string(),
-            client_secret: Some("secret".to_string()),
-            issuer_url: None,
-            allowed_domain: Some("example.com".to_string()),
-            tenant_id: None,
-            allow_user_creation: true,
-            allow_session_reuse: false,
-        };
+    fn identity(subject: &str, username_hint: Option<&str>) -> ExternalIdentity {
+        ExternalIdentity {
+            provider_key: "https://issuer.example".to_string(),
+            subject: subject.to_string(),
+            preferred_username: username_hint.map(str::to_string),
+            ..Default::default()
+        }
+    }
 
-        app.external_auth.update_settings(&settings).await.unwrap();
-        assert_eq!(app.external_auth.settings().unwrap(), settings);
+    fn groups_config(admin: &[&str], projects: &[(&str, &[&str])]) -> GroupsConfig {
+        GroupsConfig {
+            admin: admin.iter().map(|value| (*value).to_string()).collect(),
+            projects: projects
+                .iter()
+                .map(|(group, ids)| ((*group).to_string(), ids.iter().map(|id| (*id).to_string()).collect::<Vec<_>>()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn create_project(app: &Liwan, id: &str) {
+        app.projects
+            .create(
+                &crate::app::models::Project {
+                    id: id.to_string(),
+                    display_name: id.to_string(),
+                    public: false,
+                    unlisted: false,
+                    secret: None,
+                },
+                &[],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn slugify_transforms() {
+        assert_eq!(slugify("José Müller"), "jose-muller");
+        assert_eq!(slugify("李雷"), "li-lei");
+        assert_eq!(slugify("Москва"), "moskva");
+        assert_eq!(slugify("O'Brien"), "obrien");
+        assert_eq!(slugify("Mike  Simon"), "mike-simon");
+        assert_eq!(slugify("  Mike  "), "mike");
+        assert_eq!(slugify("Mike Anderson Simon"), "mike-anderson-simon");
+        assert_eq!(slugify("bob_smith"), "bob_smith");
+        assert_eq!(slugify("Bob+tag"), "bob-tag");
+        assert_eq!(slugify("Alice.B"), "alice-b");
+    }
+
+    #[test]
+    fn derive_username_order_precedence() {
+        // preferred beats email beats name beats subject
+        assert_eq!(derive_username_base(Some("Alice.B"), Some("x@y.com"), Some("Name"), "sub1"), "alice-b");
+        assert_eq!(derive_username_base(None, Some("bob@y.com"), Some("Name"), "sub1"), "bob");
+        assert_eq!(derive_username_base(None, Some("a@y.com"), Some("Name"), "sub1"), "name");
+        assert_eq!(derive_username_base(None, None, None, "abc-123"), "abc-123");
+    }
+
+    #[test]
+    fn derive_username_uses_name() {
+        assert_eq!(derive_username_base(None, None, Some("Liwan Tester"), "550e8400-uuid"), "liwan-tester");
+        assert_eq!(derive_username_base(None, None, Some("Mike Anderson Simon"), "s"), "mike-anderson-simon");
+        assert_eq!(derive_username_base(None, None, Some("José Müller"), "s"), "jose-muller");
+        assert_eq!(derive_username_base(None, None, Some("李雷"), "s"), "li-lei");
+        assert_eq!(derive_username_base(None, None, Some("Москва"), "s"), "moskva");
+        assert_eq!(derive_username_base(None, None, Some("O'Brien"), "s"), "obrien");
+    }
+
+    #[test]
+    fn derive_username_email_local_part() {
+        assert_eq!(derive_username_base(None, Some("Bob+tag@y.com"), None, "s"), "bob-tag");
+    }
+
+    #[test]
+    fn derive_username_preserves_underscore() {
+        assert_eq!(derive_username_base(Some("bob_smith"), None, None, "s"), "bob_smith");
+    }
+
+    #[test]
+    fn derive_username_short_candidate_falls_through() {
+        assert_eq!(derive_username_base(Some("ab"), None, None, "abc-123"), "abc-123");
+    }
+
+    #[test]
+    fn derive_username_pads_short_and_falls_back() {
+        assert!(derive_username_base(Some("a"), None, None, "sub").len() >= 3);
+        let u = derive_username_base(Some("@@@"), None, None, "f8c9-d0e1");
+        assert!(validate::is_valid_username(&u), "got: {u}");
+        let u = derive_username_base(None, None, None, "x");
+        assert!(validate::is_valid_username(&u), "got: {u}");
     }
 
     #[test]
@@ -551,44 +960,92 @@ mod tests {
         let identity = ExternalIdentity {
             provider_key: "https://issuer.example".to_string(),
             subject: "123".to_string(),
-            username_hint: Some("Test Person@example.com".to_string()),
+            name: Some("José Müller".to_string()),
+            ..Default::default()
         };
 
         let username = app.external_auth.create_user(&identity).unwrap();
-        assert_eq!(username, "testperson");
+        assert_eq!(username, "jose-muller");
         assert_eq!(app.external_auth.find_user(&identity.provider_key, &identity.subject).unwrap(), Some(username));
-        assert!(!app.users.check_login("testperson", "anything").unwrap());
+        assert!(!app.users.check_login("jose-muller", "anything").unwrap());
     }
 
     #[test]
     fn reuses_identity_and_resolves_username_collisions() {
         let app = Liwan::new_memory(Config::default()).unwrap();
         app.users.create("person", "password", UserRole::User, &[]).unwrap();
-        let identity = ExternalIdentity {
-            provider_key: "https://issuer.example".to_string(),
-            subject: "42".to_string(),
-            username_hint: Some("person".to_string()),
-        };
 
-        let username = app.external_auth.create_user(&identity).unwrap();
-        assert!(username.starts_with("person-"));
-        assert_eq!(app.external_auth.create_user(&identity).unwrap(), username);
+        let first = app.external_auth.create_user(&identity("42", Some("person"))).unwrap();
+        assert_eq!(first, "person-2");
+        assert_eq!(app.external_auth.create_user(&identity("42", Some("person"))).unwrap(), first);
+
+        let second = app.external_auth.create_user(&identity("43", Some("person"))).unwrap();
+        assert_eq!(second, "person-3");
     }
 
     #[test]
     fn deleting_a_user_removes_auth_records() {
         let app = Liwan::new_memory(Config::default()).unwrap();
-        let identity = ExternalIdentity {
-            provider_key: "https://issuer.example".to_string(),
-            subject: "42".to_string(),
-            username_hint: Some("person".to_string()),
-        };
+        let identity = identity("42", Some("person"));
         let username = app.external_auth.create_user(&identity).unwrap();
         app.sessions.create("session", &username, chrono::Utc::now() + chrono::Duration::hours(1)).unwrap();
 
         app.users.delete(&username).unwrap();
         assert_eq!(app.external_auth.find_user(&identity.provider_key, &identity.subject).unwrap(), None);
         assert!(app.sessions.get("session").unwrap().is_none());
+    }
+
+    #[test]
+    fn group_sync_sets_role_and_projects_and_rewrites_them() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        create_project(&app, "blog");
+        create_project(&app, "docs");
+        create_project(&app, "app");
+        let config = groups_config(&["liwan-admins"], &[("marketing", &["blog", "docs"]), ("eng", &["app"])]);
+        let username = app.external_auth.create_user(&identity("42", Some("person"))).unwrap();
+
+        app.external_auth
+            .sync_groups(&username, &config, &["liwan-admins".to_string(), "marketing".to_string()])
+            .unwrap();
+        let user = app.users.get(&username).unwrap();
+        assert_eq!(user.role, UserRole::Admin);
+        assert_eq!(user.projects, vec!["blog".to_string(), "docs".to_string()]);
+
+        // The next login is authoritative, including losing the admin group.
+        app.external_auth.sync_groups(&username, &config, &["eng".to_string()]).unwrap();
+        let user = app.users.get(&username).unwrap();
+        assert_eq!(user.role, UserRole::User);
+        assert_eq!(user.projects, vec!["app".to_string()]);
+
+        // No groups at all means no access.
+        app.external_auth.sync_groups(&username, &config, &[]).unwrap();
+        let user = app.users.get(&username).unwrap();
+        assert_eq!(user.role, UserRole::User);
+        assert!(user.projects.is_empty());
+    }
+
+    #[test]
+    fn group_sync_drops_projects_that_do_not_exist() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        create_project(&app, "blog");
+        let config = groups_config(&[], &[("marketing", &["blog", "gone"])]);
+        let username = app.external_auth.create_user(&identity("42", Some("person"))).unwrap();
+
+        app.external_auth.sync_groups(&username, &config, &["marketing".to_string()]).unwrap();
+        assert_eq!(app.users.get(&username).unwrap().projects, vec!["blog".to_string()]);
+    }
+
+    #[test]
+    fn group_sync_leaves_accounts_with_a_password_alone() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        create_project(&app, "blog");
+        app.users.create("franz", "correct-horse-battery", UserRole::Admin, &[]).unwrap();
+        let config = groups_config(&[], &[("marketing", &["blog"])]);
+
+        app.external_auth.sync_groups("franz", &config, &["marketing".to_string()]).unwrap();
+        let user = app.users.get("franz").unwrap();
+        assert_eq!(user.role, UserRole::Admin, "a locally created admin is not demoted by a missing group");
+        assert!(user.projects.is_empty());
     }
 
     #[test]
@@ -603,10 +1060,82 @@ mod tests {
     }
 
     #[test]
-    fn generated_usernames_stay_valid() {
-        let base = username_base(Some("éééééééééééééééééééééééééééééééé"));
-        assert!(validate::is_valid_username(&base));
-        assert!(base.len() <= 48);
-        assert!(validate::is_valid_username(&format!("{base}-12345678")));
+    fn link_attaches_a_subject_to_an_account_that_already_exists() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let issuer = "https://issuer.example";
+        app.users.create("franz", "correct-horse-battery", UserRole::Admin, &["p1"]).unwrap();
+
+        assert_eq!(app.external_auth.link("franz", issuer, "sub-1", false).unwrap(), LinkOutcome::Linked);
+        assert_eq!(app.external_auth.find_user(issuer, "sub-1").unwrap().as_deref(), Some("franz"));
+
+        // The account keeps everything it had, password included.
+        let user = app.users.get("franz").unwrap();
+        assert_eq!(user.role, UserRole::Admin);
+        assert_eq!(user.projects, vec!["p1".to_string()]);
+        assert!(app.users.check_login("franz", "correct-horse-battery").unwrap());
+
+        // Idempotent, and the next sign-in finds the account rather than making one.
+        assert_eq!(app.external_auth.link("franz", issuer, "sub-1", false).unwrap(), LinkOutcome::Linked);
+        assert_eq!(app.external_auth.create_user(&identity("sub-1", Some("someone"))).unwrap(), "franz");
+        assert_eq!(app.users.all().unwrap().len(), 1);
+
+        assert_eq!(app.external_auth.link("nobody", issuer, "sub-2", false).unwrap(), LinkOutcome::UserNotFound);
+    }
+
+    #[test]
+    fn link_replaces_an_sso_only_holder_and_its_sessions() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let issuer = "https://issuer.example";
+        app.users.create("franz", "correct-horse-battery", UserRole::Admin, &[]).unwrap();
+        let duplicate = app.external_auth.create_user(&identity("sub-1", Some("franz-sso"))).unwrap();
+        app.sessions.create("duplicate-session", &duplicate, chrono::Utc::now() + chrono::Duration::hours(1)).unwrap();
+
+        assert_eq!(
+            app.external_auth.link("franz", issuer, "sub-1", false).unwrap(),
+            LinkOutcome::SubjectHeldBy(duplicate.clone())
+        );
+        assert_eq!(app.external_auth.link("franz", issuer, "sub-1", true).unwrap(), LinkOutcome::Linked);
+
+        assert_eq!(app.external_auth.find_user(issuer, "sub-1").unwrap().as_deref(), Some("franz"));
+        assert!(app.users.get(&duplicate).is_err());
+        assert!(app.sessions.get("duplicate-session").unwrap().is_none());
+    }
+
+    #[test]
+    fn link_refuses_a_holder_with_a_password() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let issuer = "https://issuer.example";
+        app.users.create("franz", "correct-horse-battery", UserRole::Admin, &[]).unwrap();
+        app.users.create("other", "another-long-password", UserRole::User, &[]).unwrap();
+        app.external_auth.link("other", issuer, "sub-1", false).unwrap();
+
+        // `--replace` is for clearing up auto-provisioned duplicates, never for
+        // deleting an account somebody actually uses.
+        assert_eq!(
+            app.external_auth.link("franz", issuer, "sub-1", true).unwrap(),
+            LinkOutcome::HolderHasPassword("other".to_string())
+        );
+        assert!(app.users.get("other").is_ok());
+        assert_eq!(app.external_auth.find_user(issuer, "sub-1").unwrap().as_deref(), Some("other"));
+    }
+
+    #[test]
+    fn link_moves_an_account_to_a_new_subject() {
+        // `(provider_key, username)` is unique, so re-linking has to replace.
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let issuer = "https://issuer.example";
+        app.users.create("franz", "correct-horse-battery", UserRole::Admin, &[]).unwrap();
+
+        app.external_auth.link("franz", issuer, "old-sub", false).unwrap();
+        assert_eq!(app.external_auth.link("franz", issuer, "new-sub", false).unwrap(), LinkOutcome::Linked);
+        assert_eq!(app.external_auth.find_user(issuer, "old-sub").unwrap(), None);
+        assert_eq!(app.external_auth.find_user(issuer, "new-sub").unwrap().as_deref(), Some("franz"));
+    }
+
+    #[tokio::test]
+    async fn begin_rejects_an_unknown_provider() {
+        let app = Liwan::new_memory(Config::default()).unwrap();
+        let error = app.external_auth.begin("nope", "/").await.unwrap_err();
+        assert!(matches!(error, ExternalAuthError::UnknownProvider));
     }
 }

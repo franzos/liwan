@@ -18,6 +18,39 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.6.0-fork.1`); `N` resets to 1 on each upstream sync. Each `-fork.N` entry lists only the fork's own changes on top of that upstream base; everything else comes from the corresponding upstream release, documented further below.
 -->
 
+## [v1.7.0-fork.1] - 2026-09-15
+
+Synced the fork onto upstream's `v1.7.0` release and rebuilt single sign-on on top of upstream's own external auth. Several identity providers can now be configured at once, and Forseti is supported as a first-class provider. Configuration moved: see "Upgrading from 1.6.0-fork" in the README before upgrading.
+
+### ⚠️ Breaking Changes
+
+The `[oidc]` config table is gone, replaced by one `[oidc.providers.<name>]` table per provider. A config that still uses the old keys fails to start with a message naming the replacement, including the `LIWAN_OIDC_*` environment variables.
+
+`registration = "domain_allowlist"` is gone. Use `registration = "open"` with `allowed_domains`, which now applies on every login rather than only at sign-up.
+
+Client IP detection changed upstream: `use_forward_headers` was removed, and forwarded headers are trusted from loopback proxies only. Behind a reverse proxy, list it in `trusted_proxies`.
+
+### Features
+
+- Several identity providers at once, one login button each
+- Google Workspace and Microsoft Entra presets
+- Forseti provider: manage-account link and account-deletion webhook
+- Map IdP groups to liwan roles and project access
+- End liwan sessions on OIDC back-channel logout
+- Redirect, logout and webhook URLs are logged at startup
+- `liwan link-oidc` takes `--provider` for multi-provider setups
+- Sign-in errors now say why, instead of one generic message
+
+### Security
+
+- Email-domain restrictions apply on every login, not just sign-up
+- SSO accounts still refuse a local password
+- Provider settings moved out of the admin UI into the config file
+
+### Other
+
+- Everything else in this release comes from upstream `v1.7.0`, below
+
 ## [v1.6.0-fork.3] - 2026-09-09
 
 ### Bug Fixes

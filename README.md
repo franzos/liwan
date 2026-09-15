@@ -41,17 +41,19 @@ Choose what data to collect and how long to keep it. Location detail is adjustab
 Add a small tracking script to your website with a single line of HTML. Works with any framework or CMS.
 
 **Single sign-on**\
-Manage accounts with Google Workspaces, Microsoft Entra, or your own OpenID Connect provider like Keycloak or Dex.
+Manage accounts with Google Workspaces, Microsoft Entra, Forseti, or your own OpenID Connect provider like Keycloak or Dex - several at once, if you need to.
 
 ### OIDC/SSO
 
 This fork focuses on OIDC/SSO login. For everything else - sites, users, roles, tracking, and the rest - see the docs at [liwan.dev/getting-started](https://liwan.dev/getting-started/).
 
-Sign in with a username and password, or connect your identity provider over OIDC/SSO. With OIDC enabled, a "Sign in with SSO" button appears on the login page and accounts are provisioned automatically on first login. The username is taken from the provider's `preferred_username`, then a verified email, and — when neither is available — the user's name (e.g. `Jane Doe` → `jane-doe`), falling back to the opaque subject ID only as a last resort; either way, the account is matched on the provider's subject, so email or name changes never break the link. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
+Sign in with a username and password, or connect one or more identity providers over OIDC/SSO. Each configured provider gets its own button on the login page, and accounts are provisioned on first login. The username is taken from the provider's `preferred_username`, then a verified email, and - when neither is available - the user's name (`José Müller` becomes `jose-muller`), falling back to the opaque subject only as a last resort. The account is matched on the provider's subject, so email or name changes never break the link. The first admin is created through a one-time setup flow, and accounts can also be managed from the CLI.
+
+Providers live in the config file, not in an admin UI: they are deployment configuration, and a dashboard admin should not be able to point authentication somewhere else.
 
 #### Configuration
 
-Liwan reads a single TOML file. It looks for `./liwan.config.toml`, then `$XDG_CONFIG_HOME/liwan/config.toml` (i.e. `~/.config/liwan/config.toml`), or you can point it at an explicit path with `--config <path>` or the `LIWAN_CONFIG` env var. Any value can also be overridden with a `LIWAN_*` environment variable (e.g. `LIWAN_OIDC_CLIENT_SECRET`), which is the recommended way to pass secrets. A fully annotated example lives in [`data/config.example.toml`](data/config.example.toml).
+Liwan reads a single TOML file. It looks for `./liwan.config.toml`, then `$XDG_CONFIG_HOME/liwan/config.toml` (i.e. `~/.config/liwan/config.toml`), or you can point it at an explicit path with `--config <path>` or the `LIWAN_CONFIG` env var. Any value can also be overridden with a `LIWAN_*` environment variable (e.g. `LIWAN_OIDC_PROVIDERS_COMPANY_CLIENT_SECRET`), which is the recommended way to pass secrets. A fully annotated example lives in [`data/config.example.toml`](data/config.example.toml).
 
 ```toml
 base_url = "https://analytics.example.com"  # external URL of this instance (used to build the OIDC redirect URI)
@@ -59,44 +61,134 @@ listen   = 9042                             # local http port to bind, typically
 # data_dir = "./liwan-data"                 # defaults to ~/.local/share/liwan/data
 ```
 
-#### OpenID Connect (OIDC)
+#### Single sign-on
 
-Add an `[oidc]` section to enable SSO. It only activates once `issuer`, `client_id`, and `client_secret` are all set — at which point a "Sign in with SSO" button appears on the login page. Password login keeps working alongside it.
+Add one `[oidc.providers.<name>]` table per identity provider. Each one becomes a button on the login page; password login keeps working alongside them. `<name>` is lowercase letters, digits and hyphens - it shows up in URLs and in environment variable names, so prefer one without hyphens if the secret comes from the environment.
 
 ```toml
-[oidc]
-issuer        = "https://idp.example.com"        # discovery base; /.well-known/openid-configuration is appended
+[oidc.providers.company]
+kind          = "oidc"                      # oidc (default) | forseti | google | microsoft
+display_name  = "Company SSO"               # defaults to the kind's own name
+issuer        = "https://idp.example.com"   # discovery lives under it
 client_id     = "liwan"
-client_secret = "..."                            # prefer the LIWAN_OIDC_CLIENT_SECRET env var
-scopes        = ["openid", "email", "profile"]   # optional; this is the default
-button_label  = "Sign in with SSO"               # optional; label on the login button
+client_secret = "..."                       # prefer LIWAN_OIDC_PROVIDERS_COMPANY_CLIENT_SECRET
 ```
 
-Register this redirect URI with your provider (derived from `base_url`):
+Register this redirect URI with every provider (derived from `base_url`):
 
 ```
-<base_url>/api/dashboard/auth/oidc/callback
+<base_url>/api/dashboard/auth/external/callback
 ```
 
-First-time SSO users are created as regular users with no project access until an admin grants it; usernames are derived from the OIDC claims as described above. Accounts are matched on the provider's subject, so a later email or name change never breaks the link.
+liwan logs that URI at startup, along with the per-provider back-channel logout and account-deletion URLs, so you don't have to reconstruct them from here.
 
-#### Restricting who can register
+First-time users are created as regular users with no project access until an admin grants it. Accounts are matched on the provider's subject, so a later email or name change never breaks the link. SSO-only accounts have no password: the settings page hides the password form for them, and the API refuses to set one.
 
-By default any user your IdP authenticates gets a local account on first login. Two options narrow that — they gate **first-time provisioning only**, so returning users (matched on the provider's subject) always log in regardless:
+The four kinds differ only in what they derive for you:
+
+| `kind`      | Issuer                                             | Extras |
+| ----------- | -------------------------------------------------- | ------ |
+| `oidc`      | your `issuer`                                      | configurable `scopes` |
+| `forseti`   | your `issuer`                                      | manage-account link, account-deletion webhook |
+| `google`    | `https://accounts.google.com`                      | `allowed_domains` checks the `hd` claim |
+| `microsoft` | derived from `tenant_id`                           | logins are confined to that tenant |
+
+`microsoft` requires `tenant_id` as the tenant UUID - `common` and friends are refused, because they would let any tenant in. `scopes` is only configurable for `kind = "oidc"`; the presets know what their own provider accepts.
+
+Every option also takes an environment override, named `LIWAN_OIDC_PROVIDERS_<NAME>_<KEY>` (for the `groups` sub-table, `LIWAN_OIDC_PROVIDERS_<NAME>_GROUPS_<KEY>`). List values accept a comma-separated string.
+
+#### Who may sign in
+
+Three independent gates, all checked on **every** login rather than only at sign-up:
 
 ```toml
-[oidc]
+[oidc.providers.company]
 # ... issuer, client_id, client_secret as above ...
 
-# open (default) | closed | domain_allowlist
-registration    = "domain_allowlist"
-allowed_domains = ["example.com", "acme.org"]    # required for domain_allowlist
+registration    = "open"                       # open (default) | closed
+allowed_domains = ["example.com", "acme.org"]  # optional
 ```
 
-- **`closed`** — no new accounts; only users who already exist can log in. Handy once everyone intended is enrolled.
-- **`domain_allowlist`** — new accounts only for users whose **verified** email is in `allowed_domains`. An unverified email never qualifies, so the `email` scope is required. Matching is exact and case-insensitive — subdomains do not match (`example.com` excludes `sub.example.com`). The trust here assumes your single configured `issuer` is authoritative for those domains. Configure non-ASCII (IDN) domains in punycode.
+- **`registration`** - `closed` stops new accounts being created. People who already have one still sign in, so this is what you want once everyone intended is enrolled.
+- **`allowed_domains`** - the **verified** email's domain must be in the list. An unverified address never qualifies, so the `email` scope is required. Matching is exact and case-insensitive: `example.com` does **not** cover `sub.example.com`. Configure non-ASCII (IDN) domains in punycode. For `kind = "google"` this checks the Workspace domain (`hd`) instead, which is the claim Google actually vouches for.
 
-Rejections send the user back to the login page with a short explanation. Both fields also accept env overrides (`LIWAN_OIDC_REGISTRATION`, `LIWAN_OIDC_ALLOWED_DOMAINS` as a comma-separated list).
+Rejections send the person back to the login page with a short explanation; the reason behind it stays in the server log.
+
+#### Mapping groups to roles and projects
+
+When your provider emits a group claim, liwan can derive the role and project access from it:
+
+```toml
+[oidc.providers.company.groups]
+claim    = "groups"                                           # the claim to read; this is the default
+allowed  = ["analytics"]                                      # optional: must be in one of these to sign in
+admin    = ["liwan-admins"]                                   # members get role admin, everyone else user
+projects = { marketing = ["blog", "docs"], eng = ["app"] }    # group -> project ids
+```
+
+Role and projects are rewritten on **every** sign-in, so a group change at the provider takes effect the next time the person logs in, and local edits to such an account do not survive it. Project ids that don't exist are skipped with a warning.
+
+This only ever touches accounts without a local password. An account created locally, or attached with `link-oidc`, is left alone - which is what stops your break-glass admin being demoted by a group that went missing.
+
+#### Signing out
+
+Point your provider's `backchannel_logout_uri` at:
+
+```
+<base_url>/api/dashboard/auth/external/<name>/backchannel-logout
+```
+
+When someone signs out at the provider, liwan ends the session on that device. If the logout token names no device, every session that account has goes, password logins included. Role and group changes are **not** covered - no such event exists; they apply at the next login. liwan's own sign-out button is local and does not reach the provider.
+
+#### Forseti
+
+[Forseti](https://github.com/franzos/forseti) is supported as a first-class kind. Use its `liwan` app template to register the client, then:
+
+```toml
+[oidc.providers.company]
+kind       = "forseti"
+issuer     = "https://hydra.example.com"     # Forseti's OIDC issuer
+portal_url = "https://accounts.example.com"  # optional; Forseti's own URL, defaults to issuer
+client_id  = "liwan"
+```
+
+On top of the usual flow this adds:
+
+- **Groups.** `kind = "forseti"` requests the `groups` scope whenever a `groups` table is configured. The claim is the team slugs of the user's *active* organisation, re-resolved at every sign-in. Someone in several organisations gets the active one's teams.
+- **A manage-account link.** The settings page links out to Forseti instead of showing a password form.
+- **Account deletion.** When someone deletes their account in Forseti, it posts a signed RISC event to:
+
+  ```
+  <base_url>/api/dashboard/auth/external/<name>/account-deletion
+  ```
+
+  Set that as `account_deletion_url` on the Hydra client. An account that only ever signed in through Forseti is deleted outright, along with its sessions. One that also has a local password keeps working as a local account; only the link goes.
+
+If Forseti's discovery document can't be reached, the extras stay off and logins carry on as usual.
+
+#### Linking an existing account
+
+To make SSO land on an account that already exists - typically the first admin, created with a password - attach the provider's subject to it. The account keeps its role, projects and password:
+
+```
+liwan link-oidc <username> <subject>                      # when one provider is configured
+liwan link-oidc <username> <subject> --provider company   # when several are
+liwan link-oidc <username> <subject> --issuer https://idp.example.com
+liwan link-oidc <username> <subject> --replace            # also delete the duplicate holding that subject
+```
+
+The subject is the `sub` claim your provider issues for that person; it usually shows up as the identity ID in the provider's admin UI. `--replace` only removes accounts without a local password - a real account is never collateral.
+
+#### Upgrading from 1.6.0-fork
+
+The `[oidc]` table of earlier fork releases is gone, and a config that still uses it fails to start with a message naming the replacement. In order:
+
+1. **Add the new redirect URI** to your provider, alongside the old `/api/dashboard/auth/oidc/callback`. Both can coexist; remove the old one after the upgrade.
+2. **Rewrite the config.** `[oidc]` becomes `[oidc.providers.<name>]`; `button_label` becomes `display_name`; `LIWAN_OIDC_CLIENT_SECRET` becomes `LIWAN_OIDC_PROVIDERS_<NAME>_CLIENT_SECRET`. `registration = "domain_allowlist"` becomes `registration = "open"` with the same `allowed_domains` - which now applies on every login, not only at sign-up. Keep `issuer` byte-identical to what you have today: existing links are keyed on it.
+3. **Back up the data directory, then start the new binary.** The migration carries your existing links over to the new table. Sessions are untouched, so nobody is signed out.
+4. **Don't configure a `groups` table yet** - not until the matching teams exist at your provider. An SSO-only account you promoted to admin by hand would be demoted at its next sign-in once group mapping is on.
+5. Optionally register `backchannel_logout_uri`, and `account_deletion_url` for `kind = "forseti"`.
+
 
 ### Importing from Matomo
 

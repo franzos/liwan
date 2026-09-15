@@ -1,5 +1,5 @@
 ---
-import { CodeIcon, DatabaseIcon, KeyRoundIcon, TablePropertiesIcon, UserIcon, UsersIcon } from "lucide-react";
+import { CodeIcon, DatabaseIcon, TablePropertiesIcon, UserIcon, UsersIcon } from "lucide-react";
 
 import Layout from "./layout.astro";
 
@@ -44,10 +44,6 @@ const { title, noContainer } = Astro.props;
           <option
             selected={path.startsWith("/settings/users") ? true : undefined}
             value="/settings/users">Users</option
-          >
-          <option
-            selected={path.startsWith("/settings/authentication") ? true : undefined}
-            value="/settings/authentication">Authentication</option
           >
         </optgroup>
       </select>
@@ -125,21 +121,6 @@ const { title, noContainer } = Astro.props;
           >
             <UsersIcon size="20" />
             Users</a
-          >
-        </li>
-        <li>
-          <a
-            data-active={path.startsWith("/settings/authentication")
-              ? "true"
-              : "false"}
-            aria-current={path.startsWith("/settings/authentication")
-              ? "page"
-              : undefined}
-            class="secondary"
-            href="/settings/authentication"
-          >
-            <KeyRoundIcon size="20" />
-            Authentication</a
           >
         </li>
       </ul>

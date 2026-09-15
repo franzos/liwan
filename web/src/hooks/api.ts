@@ -26,6 +26,7 @@ export const useMe = () => {
 	return {
 		role: data?.role,
 		username: data?.username,
+		externalAccount: data?.externalAccount ?? undefined,
 		isLoading: isLoading || !mounted,
 		authError,
 	};

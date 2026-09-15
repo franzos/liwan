@@ -32,7 +32,7 @@ async fn test_login() -> Result<()> {
         .await;
     res.assert_status_success();
     let json: serde_json::Value = res.json();
-    assert_eq!(json, json!({ "username": "test", "role": "user" }));
+    assert_eq!(json, json!({ "username": "test", "role": "user", "externalAccount": null }));
 
     // logout
     let res = client
@@ -152,7 +152,7 @@ async fn expired_session() -> Result<()> {
         .await;
     res.assert_status_success();
     let json: serde_json::Value = res.json();
-    assert_eq!(json, json!({ "username": "test", "role": "user" }));
+    assert_eq!(json, json!({ "username": "test", "role": "user", "externalAccount": null }));
 
     // expire the session
     app.sessions.delete(&session_id)?;
@@ -232,7 +232,7 @@ async fn authentication_cookie_boundaries() -> Result<()> {
             vec![("cookie".to_string(), format!("liwan-session={}; liwan-username=forged", session.value()))],
         )
         .await;
-    res.assert_json(&json!({ "username": "test", "role": "user" }));
+    res.assert_json(&json!({ "username": "test", "role": "user", "externalAccount": null }));
 
     Ok(())
 }

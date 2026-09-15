@@ -66,6 +66,20 @@ impl TestClient {
         self.server.post(path).json(&body).await
     }
 
+    /// A urlencoded form post, for the server-to-server receivers.
+    pub async fn post_form(&self, path: &str, body: &str) -> axum_test::TestResponse {
+        self.server
+            .post(path)
+            .content_type("application/x-www-form-urlencoded")
+            .bytes(body.to_string().into_bytes().into())
+            .await
+    }
+
+    /// A raw body post with an explicit content type, for the webhook receivers.
+    pub async fn post_raw(&self, path: &str, content_type: &str, body: &[u8]) -> axum_test::TestResponse {
+        self.server.post(path).content_type(content_type).bytes(body.to_vec().into()).await
+    }
+
     pub async fn put_with_headers(
         &self,
         path: &str,

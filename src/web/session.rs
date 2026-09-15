@@ -47,8 +47,23 @@ pub static LOGOUT_COOKIES: LazyLock<CookieJar> = LazyLock::new(|| {
 
 /// Creates a Liwan session and adds its browser cookies.
 pub(crate) fn issue_session(app: &Liwan, cookies: CookieJar, username: &str) -> anyhow::Result<CookieJar> {
+    issue(app, cookies, username, None)
+}
+
+/// The same, for an SSO login: the IdP's session id rides along so back-channel
+/// logout can end this device and leave the account's other sessions alone.
+pub(crate) fn issue_external_session(
+    app: &Liwan,
+    cookies: CookieJar,
+    username: &str,
+    external_sid: Option<&str>,
+) -> anyhow::Result<CookieJar> {
+    issue(app, cookies, username, external_sid)
+}
+
+fn issue(app: &Liwan, cookies: CookieJar, username: &str, external_sid: Option<&str>) -> anyhow::Result<CookieJar> {
     let session_id = session_token();
-    app.sessions.create(&session_id, username, Utc::now() + MAX_SESSION_AGE)?;
+    app.sessions.create_external(&session_id, username, Utc::now() + MAX_SESSION_AGE, external_sid)?;
 
     let mut public_cookie = PUBLIC_COOKIE.clone();
     let mut session_cookie = SESSION_COOKIE.clone();

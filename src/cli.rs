@@ -1,5 +1,5 @@
 use crate::{
-    app::{Liwan, PasswordUpdateOutcome, models::UserRole},
+    app::{LinkOutcome, Liwan, PasswordUpdateOutcome, models::UserRole},
     config::{Config, DEFAULT_CONFIG, GeoIpConfig},
 };
 use anyhow::{Result, bail};
@@ -29,6 +29,7 @@ pub fn args() -> Args {
 pub enum Command {
     GenerateConfig(GenConfig),
     UpdatePassword(UpdatePassword),
+    LinkOidc(LinkOidc),
     AddUser(AddUser),
     Users(ListUsers),
     Prune(Prune),
@@ -173,6 +174,31 @@ pub struct UpdatePassword {
 }
 
 #[derive(FromArgs)]
+#[argh(subcommand, name = "link-oidc")]
+/// Attach an SSO identity to an existing account
+pub struct LinkOidc {
+    #[argh(positional)]
+    /// the username of the account to attach the identity to
+    username: String,
+
+    #[argh(positional)]
+    /// the `sub` claim your provider issues for that person
+    subject: String,
+
+    #[argh(option)]
+    /// the configured provider name; optional when only one is configured
+    provider: Option<String>,
+
+    #[argh(option)]
+    /// the issuer URL, instead of --provider
+    issuer: Option<String>,
+
+    #[argh(switch)]
+    /// also delete the auto-provisioned account currently holding the subject
+    replace: bool,
+}
+
+#[derive(FromArgs)]
 #[argh(subcommand, name = "users")]
 /// List all registered users
 pub struct ListUsers {}
@@ -207,6 +233,25 @@ pub async fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
                     "user {} signs in via SSO and has no local password; \
                      use `liwan add-user` to create a separate local admin instead",
                     update.username
+                ),
+            }
+        }
+        Command::LinkOidc(link) => {
+            let issuer = resolve_issuer(&config, link.provider.as_deref(), link.issuer.as_deref())?;
+            let app = Liwan::try_new(config)?;
+            match app.external_auth.link(&link.username, &issuer, &link.subject, link.replace)? {
+                LinkOutcome::Linked => {
+                    println!("Linked {} to {} at {}", link.username, link.subject, issuer);
+                }
+                LinkOutcome::UserNotFound => bail!("user {} does not exist", link.username),
+                LinkOutcome::SubjectHeldBy(holder) => bail!(
+                    "subject {} is already linked to {holder}; pass --replace to delete that account and take the subject over",
+                    link.subject
+                ),
+                LinkOutcome::HolderHasPassword(holder) => bail!(
+                    "subject {} is linked to {holder}, which has a local password; \
+                     --replace only removes auto-provisioned accounts",
+                    link.subject
                 ),
             }
         }
@@ -335,9 +380,90 @@ pub async fn handle_command(mut config: Config, cmd: Command) -> Result<()> {
     Ok(())
 }
 
+/// The issuer to link against: named directly, taken from a configured provider,
+/// or inferred when there is only one provider to mean.
+fn resolve_issuer(config: &Config, provider: Option<&str>, issuer: Option<&str>) -> Result<String> {
+    match (provider, issuer) {
+        (Some(_), Some(_)) => bail!("pass either --provider or --issuer, not both"),
+        (None, Some(issuer)) => Ok(issuer.to_string()),
+        (Some(name), None) => {
+            let provider =
+                config.oidc.get(name).ok_or_else(|| anyhow::anyhow!("no provider named {name} is configured"))?;
+            provider.issuer_url()
+        }
+        (None, None) => match config.oidc.only() {
+            Some((_, provider)) => provider.issuer_url(),
+            None if config.oidc.providers.is_empty() => {
+                bail!("no providers are configured; pass --issuer with the issuer URL")
+            }
+            None => bail!("several providers are configured; pass --provider <name> to say which"),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ProviderConfig, ProviderKind};
+
+    fn config_with(providers: &[(&str, ProviderConfig)]) -> Config {
+        let mut config = Config::default();
+        for (name, provider) in providers {
+            config.oidc.providers.insert((*name).to_string(), provider.clone());
+        }
+        config
+    }
+
+    fn oidc_provider(issuer: &str) -> ProviderConfig {
+        ProviderConfig {
+            issuer: Some(issuer.to_string()),
+            client_id: "liwan".to_string(),
+            client_secret: "shhh".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn link_oidc_infers_the_only_configured_provider() {
+        let config = config_with(&[("company", oidc_provider("https://idp.example.com"))]);
+        assert_eq!(resolve_issuer(&config, None, None).unwrap(), "https://idp.example.com");
+        assert_eq!(resolve_issuer(&config, Some("company"), None).unwrap(), "https://idp.example.com");
+
+        // A preset kind derives its issuer rather than carrying one.
+        let google = config_with(&[(
+            "google",
+            ProviderConfig { kind: ProviderKind::Google, client_id: "liwan".to_string(), ..Default::default() },
+        )]);
+        assert_eq!(resolve_issuer(&google, None, None).unwrap(), "https://accounts.google.com");
+    }
+
+    #[test]
+    fn link_oidc_requires_a_provider_when_ambiguous() {
+        let config = config_with(&[
+            ("company", oidc_provider("https://idp.example.com")),
+            ("partner", oidc_provider("https://idp.partner.example")),
+        ]);
+
+        let error = resolve_issuer(&config, None, None).unwrap_err();
+        assert!(error.to_string().contains("--provider <name>"), "got: {error}");
+        assert_eq!(resolve_issuer(&config, Some("partner"), None).unwrap(), "https://idp.partner.example");
+
+        let error = resolve_issuer(&config, Some("nope"), None).unwrap_err();
+        assert!(error.to_string().contains("no provider named nope"), "got: {error}");
+    }
+
+    #[test]
+    fn link_oidc_accepts_a_bare_issuer() {
+        let config = Config::default();
+        assert_eq!(resolve_issuer(&config, None, Some("https://idp.example.com")).unwrap(), "https://idp.example.com");
+
+        let error = resolve_issuer(&config, None, None).unwrap_err();
+        assert!(error.to_string().contains("no providers are configured"), "got: {error}");
+
+        let config = config_with(&[("company", oidc_provider("https://idp.example.com"))]);
+        let error = resolve_issuer(&config, Some("company"), Some("https://other.example")).unwrap_err();
+        assert!(error.to_string().contains("not both"), "got: {error}");
+    }
 
     #[tokio::test]
     async fn update_password_cli_rejects_sso_only_account() {

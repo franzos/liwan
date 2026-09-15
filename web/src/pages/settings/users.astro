@@ -9,8 +9,8 @@ import Settings from "@/layouts/settings.astro";
     <CreateUser client:only="react" />
   </nav>
   <p class="description">
-    Manage dashboard access and administrator roles. Configure sign-in methods
-    in <a href="/settings/authentication">Authentication settings</a>.
+    Manage dashboard access and administrator roles. Single sign-on providers
+    are configured in the config file, under <code>[oidc.providers]</code>.
   </p>
   <UsersTable client:load />
 </Settings>

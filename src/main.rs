@@ -27,6 +27,8 @@ async fn main() -> Result<()> {
         return cli::handle_command(config, cmd).await;
     }
 
+    config.log_provider_urls();
+
     let app = Liwan::try_new(config)?;
     let app_copy = app.clone();
     app.run_background_tasks();

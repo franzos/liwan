@@ -5,7 +5,10 @@ mod db;
 pub mod import;
 pub mod models;
 pub use core::reports;
-pub use core::{ExternalAuthLogin, ExternalAuthProvider, ExternalAuthSettings, ExternalAuthStart, LiwanExternalAuth};
+pub use core::{
+    ExternalAccount, ExternalAuthError, ExternalAuthLogin, ExternalAuthStart, LinkOutcome, LiwanExternalAuth,
+    MAX_LOGOUT_BODY, MAX_WEBHOOK_BODY, Rejection, SET_CONTENT_TYPE, WebhookError, email_domain,
+};
 use std::sync::Arc;
 
 use crate::{config::Config, utils::writable::check_directory_writable};
@@ -79,7 +82,7 @@ impl Liwan {
             events: LiwanEvents::try_new(conn_events.clone(), conn_app.clone(), config.visitor_group_rotation_hour)?,
             onboarding: LiwanOnboarding::try_new(&conn_app)?,
             sessions: LiwanSessions::new(conn_app.clone()),
-            external_auth: LiwanExternalAuth::try_new(conn_app.clone(), &config.base_url)?,
+            external_auth: LiwanExternalAuth::try_new(conn_app.clone(), &config)?,
             entities: LiwanEntities::new(conn_app.clone()),
             projects: LiwanProjects::new(conn_app.clone()),
             settings: LiwanSettings::try_new(conn_app.clone())?,
@@ -104,7 +107,7 @@ impl Liwan {
             events: LiwanEvents::try_new(conn_events.clone(), conn_app.clone(), config.visitor_group_rotation_hour)?,
             onboarding: LiwanOnboarding::try_new(&conn_app)?,
             sessions: LiwanSessions::new(conn_app.clone()),
-            external_auth: LiwanExternalAuth::try_new(conn_app.clone(), &config.base_url)?,
+            external_auth: LiwanExternalAuth::try_new(conn_app.clone(), &config)?,
             entities: LiwanEntities::new(conn_app.clone()),
             projects: LiwanProjects::new(conn_app.clone()),
             settings: LiwanSettings::try_new(conn_app.clone())?,
@@ -197,72 +200,6 @@ impl Liwan {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::utils::{r2d2_sqlite::SqliteConnectionManager, refinery_sqlite::RqlConnection};
-
-    /// `V6` carries the fork's `users.oidc_issuer`/`oidc_subject` links over to
-    /// `external_identities` before the old table is dropped, so an upgrade does
-    /// not force a re-enrolment.
-    #[test]
-    fn migration_v6_converts_fork_identities() {
-        let pool = r2d2::Pool::new(SqliteConnectionManager::memory()).unwrap();
-        let mut runner = embedded::app::migrations::runner();
-        runner.set_migration_table_name("migrations");
-        runner.set_target(refinery::Target::Version(5)).run(&mut RqlConnection(pool.get().unwrap())).unwrap();
-
-        {
-            let conn = pool.get().unwrap();
-            conn.execute(
-                "insert into users (username, password_hash, role, projects, auth) values ('bob', 'hash', 'admin', 'p1', 'password')",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "insert into users (username, password_hash, role, projects, email, oidc_issuer, oidc_subject, auth)
-                 values ('alice', null, 'user', '', 'a@b.com', 'https://idp.example.com', 'sub-1', 'oidc')",
-                [],
-            )
-            .unwrap();
-            for (id, username) in [("s-bob", "bob"), ("s-alice", "alice")] {
-                conn.execute(
-                    "insert into sessions (id, username, expires_at) values (?, ?, ?)",
-                    rusqlite::params![id, username, chrono::Utc::now() + chrono::Duration::hours(1)],
-                )
-                .unwrap();
-            }
-        }
-
-        let mut runner = embedded::app::migrations::runner();
-        runner.set_migration_table_name("migrations");
-        runner.run(&mut RqlConnection(pool.get().unwrap())).unwrap();
-
-        let conn = pool.get().unwrap();
-        let identity: (String, String, String) = conn
-            .query_row("select provider_key, subject, username from external_identities", [], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .unwrap();
-        assert_eq!(identity, ("https://idp.example.com".to_string(), "sub-1".to_string(), "alice".to_string()));
-
-        let columns: Vec<String> = conn
-            .prepare("select name from pragma_table_info('users')")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        assert_eq!(columns, vec!["username", "password_hash", "role", "projects"]);
-
-        assert!(
-            !conn.prepare("select 1 from sqlite_master where name = 'oidc_auth_state'").unwrap().exists([]).unwrap()
-        );
-        let sessions: u32 = conn.query_row("select count(*) from sessions", [], |row| row.get(0)).unwrap();
-        assert_eq!(sessions, 2);
-    }
-}
-
 #[cfg(any(debug_assertions, test))]
 impl Liwan {
     pub fn seed_database(&self, count_per_entity: usize) -> Result<()> {
@@ -331,5 +268,71 @@ impl Liwan {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::{r2d2_sqlite::SqliteConnectionManager, refinery_sqlite::RqlConnection};
+
+    /// `V6` carries the fork's `users.oidc_issuer`/`oidc_subject` links over to
+    /// `external_identities` before the old table is dropped, so an upgrade does
+    /// not force a re-enrolment.
+    #[test]
+    fn migration_v6_converts_fork_identities() {
+        let pool = r2d2::Pool::new(SqliteConnectionManager::memory()).unwrap();
+        let mut runner = embedded::app::migrations::runner();
+        runner.set_migration_table_name("migrations");
+        runner.set_target(refinery::Target::Version(5)).run(&mut RqlConnection(pool.get().unwrap())).unwrap();
+
+        {
+            let conn = pool.get().unwrap();
+            conn.execute(
+                "insert into users (username, password_hash, role, projects, auth) values ('bob', 'hash', 'admin', 'p1', 'password')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "insert into users (username, password_hash, role, projects, email, oidc_issuer, oidc_subject, auth)
+                 values ('alice', null, 'user', '', 'a@b.com', 'https://idp.example.com', 'sub-1', 'oidc')",
+                [],
+            )
+            .unwrap();
+            for (id, username) in [("s-bob", "bob"), ("s-alice", "alice")] {
+                conn.execute(
+                    "insert into sessions (id, username, expires_at) values (?, ?, ?)",
+                    rusqlite::params![id, username, chrono::Utc::now() + chrono::Duration::hours(1)],
+                )
+                .unwrap();
+            }
+        }
+
+        let mut runner = embedded::app::migrations::runner();
+        runner.set_migration_table_name("migrations");
+        runner.run(&mut RqlConnection(pool.get().unwrap())).unwrap();
+
+        let conn = pool.get().unwrap();
+        let identity: (String, String, String) = conn
+            .query_row("select provider_key, subject, username from external_identities", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(identity, ("https://idp.example.com".to_string(), "sub-1".to_string(), "alice".to_string()));
+
+        let columns: Vec<String> = conn
+            .prepare("select name from pragma_table_info('users')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(columns, vec!["username", "password_hash", "role", "projects"]);
+
+        assert!(
+            !conn.prepare("select 1 from sqlite_master where name = 'oidc_auth_state'").unwrap().exists([]).unwrap()
+        );
+        let sessions: u32 = conn.query_row("select count(*) from sessions", [], |row| row.get(0)).unwrap();
+        assert_eq!(sessions, 2);
     }
 }

@@ -2555,7 +2555,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "liwan"
-version = "1.6.0-fork.3"
+version = "1.7.0-fork.1"
 dependencies = [
  "ahash",
  "aide",

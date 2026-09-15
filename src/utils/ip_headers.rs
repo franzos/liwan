@@ -232,6 +232,28 @@ pub fn should_trust_proxy_headers(peer_ip: Option<IpAddr>, proxies: &[TrustedPro
     peer_ip.is_some_and(|ip| proxies.iter().any(|proxy| proxy.contains(ip)))
 }
 
+/// Whether an address is internet-routable. Used by the Matomo importer to drop
+/// pageviews tracked against a development host.
+pub fn is_public_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            !(ipv4.is_private()
+                || ipv4.is_loopback()
+                || ipv4.is_link_local()
+                || ipv4.is_broadcast()
+                || ipv4.is_unspecified()
+                || ipv4.is_multicast())
+        }
+        IpAddr::V6(ipv6) => {
+            !(ipv6.is_loopback()
+                || ipv6.is_unspecified()
+                || ipv6.is_multicast()
+                || ipv6.is_unique_local()
+                || ipv6.is_unicast_link_local())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,27 +328,5 @@ mod tests {
             Some("203.0.113.10".parse().unwrap())
         );
         assert_eq!(parse_client_ip(request.headers(), &source, peer, &peer_only), Some("10.0.0.1".parse().unwrap()));
-    }
-}
-
-/// Whether an address is internet-routable. Used by the Matomo importer to drop
-/// pageviews tracked against a development host.
-pub fn is_public_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ipv4) => {
-            !(ipv4.is_private()
-                || ipv4.is_loopback()
-                || ipv4.is_link_local()
-                || ipv4.is_broadcast()
-                || ipv4.is_unspecified()
-                || ipv4.is_multicast())
-        }
-        IpAddr::V6(ipv6) => {
-            !(ipv6.is_loopback()
-                || ipv6.is_unspecified()
-                || ipv6.is_multicast()
-                || ipv6.is_unique_local()
-                || ipv6.is_unicast_link_local())
-        }
     }
 }

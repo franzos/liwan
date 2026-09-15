@@ -14,14 +14,25 @@ use openidconnect::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ExternalAuthProvider, ExternalAuthSettings, ExternalIdentity, http};
+use crate::config::ProviderConfig;
 
+use super::{ExternalIdentity, http};
+
+/// The claims liwan reads beyond the standard set. `extra` keeps the rest of the
+/// token so the group claim can be read under whatever name the IdP uses.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ProviderClaims {
+    /// Google's Workspace domain.
     #[serde(default)]
     hd: Option<String>,
+    /// Microsoft's tenant.
     #[serde(default)]
     tid: Option<String>,
+    /// The IdP's session id, for back-channel logout.
+    #[serde(default)]
+    sid: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl AdditionalClaims for ProviderClaims {}
@@ -54,15 +65,16 @@ type ProviderClient = Client<
     EndpointMaybeSet,
 >;
 
-enum ProviderPolicy {
-    Generic,
-    Google { allowed_domain: Option<String> },
-    Microsoft { tenant_id: String },
-}
-
 pub(super) struct FlowSecret {
     nonce: Nonce,
     verifier: PkceCodeVerifier,
+}
+
+impl FlowSecret {
+    #[cfg(any(test, feature = "__dev"))]
+    pub(super) fn nonce_secret(&self) -> String {
+        self.nonce.secret().clone()
+    }
 }
 
 pub(super) struct Authorization {
@@ -74,57 +86,86 @@ pub(super) struct Authorization {
 pub(super) struct Provider {
     client: ProviderClient,
     provider_key: String,
-    policy: ProviderPolicy,
+    scopes: Vec<String>,
+    groups_claim: Option<String>,
     allow_session_reuse: bool,
+    /// The signing keys and algorithms discovery advertised, kept for
+    /// back-channel logout tokens. `openidconnect` verifies ID tokens itself but
+    /// has no logout-token path, and its JWT types are not public.
+    jwks: jsonwebtoken::jwk::JwkSet,
+    signing_algorithms: Vec<jsonwebtoken::Algorithm>,
 }
 
 impl Provider {
-    pub(super) async fn from_settings(
-        settings: &ExternalAuthSettings,
+    pub(super) async fn from_config(
+        config: &ProviderConfig,
         redirect_url: &str,
         client: &reqwest::Client,
     ) -> Result<Self> {
-        let (issuer, policy) = match settings.provider {
-            ExternalAuthProvider::Oidc => {
-                (settings.issuer_url.clone().context("issuer URL is required")?, ProviderPolicy::Generic)
-            }
-            ExternalAuthProvider::Google => (
-                "https://accounts.google.com".to_string(),
-                ProviderPolicy::Google { allowed_domain: settings.allowed_domain.clone() },
-            ),
-            ExternalAuthProvider::Microsoft => {
-                let tenant_id = settings.tenant_id.clone().context("Microsoft tenant ID is required")?;
-                (microsoft_issuer(&tenant_id)?, ProviderPolicy::Microsoft { tenant_id })
-            }
-        };
+        let issuer = config.issuer_url()?;
         validate_issuer(&issuer)?;
         let issuer = IssuerUrl::new(issuer)?;
         let metadata = discover(issuer, client).await?;
         let provider_key = metadata.issuer().to_string();
+        let jwks = reencode_jwks(metadata.jwks())?;
+        let signing_algorithms = metadata
+            .id_token_signing_alg_values_supported()
+            .iter()
+            .filter_map(|algorithm| {
+                // The JSON name is the wire name ("RS256", "EdDSA", ...).
+                serde_json::to_value(algorithm).ok()?.as_str()?.parse::<jsonwebtoken::Algorithm>().ok()
+            })
+            .collect::<Vec<_>>();
         let auth_type = token_auth_type(metadata.token_endpoint_auth_methods_supported())?;
         let oidc_client = ProviderClient::from_provider_metadata(
             metadata,
-            ClientId::new(settings.client_id.clone()),
-            settings.client_secret.clone().map(ClientSecret::new),
+            ClientId::new(config.client_id.clone()),
+            Some(ClientSecret::new(config.client_secret.clone())),
         )
         .set_auth_type(auth_type)
         .set_redirect_uri(RedirectUrl::new(redirect_url.to_string())?);
 
-        Ok(Self { client: oidc_client, provider_key, policy, allow_session_reuse: settings.allow_session_reuse })
+        Ok(Self {
+            client: oidc_client,
+            provider_key,
+            scopes: config.effective_scopes(),
+            groups_claim: config.groups.as_ref().map(|groups| groups.claim.clone()),
+            allow_session_reuse: config.allow_session_reuse,
+            jwks,
+            signing_algorithms,
+        })
+    }
+
+    pub(super) fn jwks(&self) -> &jsonwebtoken::jwk::JwkSet {
+        &self.jwks
+    }
+
+    pub(super) fn signing_algorithms(&self) -> &[jsonwebtoken::Algorithm] {
+        &self.signing_algorithms
+    }
+
+    /// The issuer discovery reported. Identities are keyed on it rather than on
+    /// the config name, so a provider can be renamed without breaking links.
+    pub(super) fn provider_key(&self) -> &str {
+        &self.provider_key
     }
 
     pub(super) fn authorize(&self) -> Authorization {
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let request = self
+        let mut request = self
             .client
             .authorize_url(
                 AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
                 CsrfToken::new_random,
                 Nonce::new_random,
             )
-            .add_scope(Scope::new("profile".to_string()))
-            .add_scope(Scope::new("email".to_string()))
             .set_pkce_challenge(challenge);
+        for scope in &self.scopes {
+            // `openid` is implied by the flow and the crate adds it itself.
+            if scope != "openid" {
+                request = request.add_scope(Scope::new(scope.clone()));
+            }
+        }
         let request = if self.allow_session_reuse { request } else { request.add_prompt(CoreAuthPrompt::Login) };
         let (url, state, nonce) = request.url();
         Authorization { url, state: state.secret().clone(), secret: FlowSecret { nonce, verifier } }
@@ -144,34 +185,53 @@ impl Provider {
             .await?;
         let id_token = token.id_token().context("provider did not return an ID token")?;
         let claims = id_token.claims(&self.client.id_token_verifier(), &secret.nonce)?;
+        let additional = claims.additional_claims();
 
-        match &self.policy {
-            ProviderPolicy::Google { allowed_domain } => {
-                if let Some(domain) = allowed_domain
-                    && !claims.additional_claims().hd.as_deref().is_some_and(|claim| claim.eq_ignore_ascii_case(domain))
-                {
-                    bail!("Google account is outside the allowed Workspace domain");
-                }
-            }
-            ProviderPolicy::Microsoft { tenant_id } => {
-                if !claims.additional_claims().tid.as_deref().is_some_and(|claim| claim.eq_ignore_ascii_case(tenant_id))
-                {
-                    bail!("Microsoft account is outside the configured tenant");
-                }
-            }
-            ProviderPolicy::Generic => {}
-        }
+        // An unverified address is attacker-controlled; it must never reach the
+        // domain check or a username.
+        let email = match (claims.email(), claims.email_verified()) {
+            (Some(email), Some(true)) => Some(email.as_str().to_string()),
+            _ => None,
+        };
 
-        let username_hint = claims
-            .preferred_username()
-            .map(|value| value.as_str().to_string())
-            .or_else(|| claims.email().map(|value| value.as_str().to_string()))
-            .or_else(|| claims.name().and_then(|name| name.get(None)).map(|value| value.as_str().to_string()));
         Ok(ExternalIdentity {
             provider_key: self.provider_key.clone(),
             subject: claims.subject().as_str().to_string(),
-            username_hint,
+            email,
+            preferred_username: claims.preferred_username().map(|value| value.as_str().to_string()),
+            name: claims.name().and_then(|name| name.get(None)).map(|value| value.as_str().to_string()),
+            hd: additional.hd.clone(),
+            tid: additional.tid.clone(),
+            sid: additional.sid.clone(),
+            groups: self.groups_claim.as_deref().and_then(|claim| read_groups(&additional.extra, claim)),
         })
+    }
+}
+
+/// Both crates model RFC 7517, so the key set round-trips through its own JSON.
+/// `openidconnect` keeps its JWT types private, so logout tokens are verified
+/// with `jsonwebtoken` instead.
+fn reencode_jwks(jwks: &JsonWebKeySet<CoreJsonWebKey>) -> Result<jsonwebtoken::jwk::JwkSet> {
+    let json = serde_json::to_value(jwks)?;
+    // A key type `jsonwebtoken` cannot represent is dropped rather than fatal:
+    // it would only ever have been unusable for a logout token anyway.
+    let keys = json
+        .get("keys")
+        .and_then(serde_json::Value::as_array)
+        .map(|keys| keys.iter().filter_map(|key| serde_json::from_value(key.clone()).ok()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    Ok(jsonwebtoken::jwk::JwkSet { keys })
+}
+
+/// An absent claim is `None`; a present one is its string members, with anything
+/// else dropped. A lone string is accepted as a one-element list.
+fn read_groups(claims: &serde_json::Map<String, serde_json::Value>, claim: &str) -> Option<Vec<String>> {
+    match claims.get(claim)? {
+        serde_json::Value::Array(values) => {
+            Some(values.iter().filter_map(|value| value.as_str().map(str::to_string)).collect())
+        }
+        serde_json::Value::String(value) => Some(vec![value.clone()]),
+        _ => None,
     }
 }
 
@@ -214,14 +274,23 @@ fn validate_server_endpoint(endpoint: &url::Url, issuer: &IssuerUrl) -> Result<(
         bail!("OIDC provider endpoint cannot target a private IP address");
     }
     if endpoint.scheme() != "https" {
-        let loopback = endpoint.host_str().is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
-        let issuer_loopback =
-            issuer.url().host_str().is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
-        if !(endpoint.scheme() == "http" && loopback && issuer_loopback) {
+        // Both ends have to be on this machine: an http endpoint advertised by a
+        // loopback issuer is local development, one advertised by a remote
+        // issuer is a downgrade.
+        if !(endpoint.scheme() == "http" && is_loopback(endpoint) && is_loopback(issuer.url())) {
             bail!("OIDC provider endpoint must use HTTPS");
         }
     }
     Ok(())
+}
+
+fn is_loopback(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(host)) => crate::config::resolves_to_loopback(host, url.port().unwrap_or(80)),
+        None => false,
+    }
 }
 
 fn is_private_ip(address: IpAddr) -> bool {
@@ -246,27 +315,9 @@ fn token_auth_type(methods: Option<&Vec<CoreClientAuthMethod>>) -> Result<AuthTy
     }
 }
 
-fn microsoft_issuer(tenant_id: &str) -> Result<String> {
-    let valid_tenant_id = tenant_id.len() == 36
-        && tenant_id.char_indices().all(|(index, character)| {
-            if matches!(index, 8 | 13 | 18 | 23) { character == '-' } else { character.is_ascii_hexdigit() }
-        });
-    if !valid_tenant_id {
-        bail!("Microsoft tenant ID must be a UUID");
-    }
-    let mut issuer = url::Url::parse("https://login.microsoftonline.com")?;
-    issuer
-        .path_segments_mut()
-        .map_err(|_| anyhow::anyhow!("invalid Microsoft authority"))?
-        .push(&tenant_id.to_lowercase())
-        .push("v2.0");
-    Ok(issuer.to_string())
-}
-
 fn validate_issuer(issuer: &str) -> Result<()> {
     let url = url::Url::parse(issuer)?;
-    let loopback = url.host_str().is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
-    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback(&url)) {
         bail!("OIDC issuer must use HTTPS");
     }
     if url.query().is_some() || url.fragment().is_some() {
@@ -289,13 +340,40 @@ mod tests {
     }
 
     #[test]
-    fn microsoft_requires_a_tenant_id() {
-        for tenant_id in ["", "common", "example.onmicrosoft.com", "not-a-uuid"] {
-            assert!(microsoft_issuer(tenant_id).is_err());
-        }
-        assert_eq!(
-            microsoft_issuer("72F988BF-86F1-41AF-91AB-2D7CD011DB47").unwrap(),
-            "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0"
-        );
+    fn reads_the_group_claim_under_its_configured_name() {
+        let claims: serde_json::Map<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
+            "groups": ["analytics", 7, "ops"],
+            "roles": "admin",
+            "teams": 3,
+        }))
+        .unwrap();
+
+        assert_eq!(read_groups(&claims, "groups"), Some(vec!["analytics".to_string(), "ops".to_string()]));
+        assert_eq!(read_groups(&claims, "roles"), Some(vec!["admin".to_string()]));
+        assert_eq!(read_groups(&claims, "teams"), None, "a number is not a group list");
+        assert_eq!(read_groups(&claims, "absent"), None);
+    }
+
+    #[test]
+    fn issuer_must_be_https_outside_loopback() {
+        assert!(validate_issuer("https://idp.example.com").is_ok());
+        assert!(validate_issuer("http://localhost:4444").is_ok());
+        assert!(validate_issuer("http://127.0.0.1:4444").is_ok());
+        assert!(validate_issuer("http://idp.example.com").is_err());
+        assert!(validate_issuer("https://idp.example.com/?a=b").is_err());
+    }
+
+    #[test]
+    fn an_http_endpoint_needs_a_loopback_issuer_too() {
+        let loopback = IssuerUrl::new("http://127.0.0.1:4444".to_string()).unwrap();
+        let remote = IssuerUrl::new("https://idp.example.com".to_string()).unwrap();
+
+        assert!(validate_server_endpoint(&url::Url::parse("http://127.0.0.1:4444/token").unwrap(), &loopback).is_ok());
+        assert!(validate_server_endpoint(&url::Url::parse("https://idp.example.com/token").unwrap(), &remote).is_ok());
+
+        // A real issuer that hands out a plaintext endpoint is a downgrade.
+        assert!(validate_server_endpoint(&url::Url::parse("http://idp.example.com/token").unwrap(), &remote).is_err());
+        // And one that points into the local network is an SSRF attempt.
+        assert!(validate_server_endpoint(&url::Url::parse("https://10.0.0.5/token").unwrap(), &remote).is_err());
     }
 }

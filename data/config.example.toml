@@ -66,3 +66,58 @@ listen = 9042  # The port to listen on (http)
 # event_period_ms=50
 # event_burst=100
 
+# Single sign-on (Optional)
+# Each [oidc.providers.<name>] table adds a button to the login page. <name> is
+# lowercase letters, digits and hyphens; it appears in the start URL, in the
+# webhook URLs and in env var names, so prefer one without hyphens if the secret
+# comes from the environment. Password login keeps working alongside SSO.
+#
+# Register this redirect URI with every provider (derived from base_url):
+#   <base_url>/api/dashboard/auth/external/callback
+# The per-provider back-channel logout and account-deletion URLs are logged at
+# startup.
+
+# [oidc.providers.company]
+# kind                = "oidc"                    # oidc (default) | forseti | google | microsoft
+# display_name        = "Company SSO"             # defaults to the kind's name
+# issuer              = "https://idp.example.com" # oidc and forseti; discovery lives under it
+# client_id           = "liwan"
+# client_secret       = "..."                     # prefer LIWAN_OIDC_PROVIDERS_COMPANY_CLIENT_SECRET
+# scopes              = ["openid", "email", "profile"]  # oidc only; this is the default
+# allow_session_reuse = true                      # false sends prompt=login, forcing re-authentication
+# registration        = "open"                    # open (default) | closed
+#
+# Email domains permitted to sign in, checked on every login (not just sign-up).
+# Needs the "email" scope; an unverified email never qualifies. Matching is exact
+# and case-insensitive, so subdomains do not match. Use punycode for IDN domains.
+# allowed_domains     = ["example.com", "acme.org"]
+
+# Map IdP groups onto liwan roles and project access. Only applied to accounts
+# without a local password, and rewritten on every login — so a group change at
+# the IdP takes effect at the next sign-in, and local edits to such an account
+# do not survive it.
+# [oidc.providers.company.groups]
+# claim    = "groups"                             # the claim to read; this is the default
+# allowed  = ["analytics"]                        # optional: must be in one of these to sign in
+# admin    = ["liwan-admins"]                     # members get role admin, everyone else user
+# projects = { marketing = ["blog", "docs"], eng = ["app"] }
+
+# Forseti (https://github.com/franzos/forseti) adds group-driven access, a
+# manage-account link on the settings page, and an account-deletion webhook.
+# [oidc.providers.company]
+# kind       = "forseti"
+# issuer     = "https://hydra.example.com"        # Forseti's OIDC issuer
+# portal_url = "https://accounts.example.com"     # optional; Forseti's own URL, defaults to issuer
+# client_id  = "liwan"
+
+# Google Workspace. allowed_domains restricts to your Workspace domains.
+# [oidc.providers.google]
+# kind      = "google"
+# client_id = "....apps.googleusercontent.com"
+
+# Microsoft Entra ID. tenant_id must be the tenant UUID, not "common".
+# [oidc.providers.entra]
+# kind      = "microsoft"
+# tenant_id = "72f988bf-86f1-41af-91ab-2d7cd011db47"
+# client_id = "..."
+

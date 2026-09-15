@@ -63,13 +63,37 @@ pub struct SetupRequest {
 }
 
 #[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAccountResponse {
+    /// The provider's display name, for "Manage your account at ...".
+    pub provider: String,
+    pub manage_url: Option<String>,
+}
+
+#[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct MeResponse {
     pub username: String,
     pub role: UserRole,
+    /// Set for accounts that sign in through an IdP. The settings page hides the
+    /// password form for these.
+    pub external_account: Option<ExternalAccountResponse>,
 }
 
-async fn me(Auth(user): Auth) -> UseApi<impl IntoApiResponse, Json<MeResponse>> {
-    ([(header::CACHE_CONTROL, "private")], Json(MeResponse { username: user.username, role: user.role })).into()
+async fn me(app: State<RouterState>, Auth(user): Auth) -> UseApi<impl IntoApiResponse, Json<MeResponse>> {
+    let external_account = app
+        .external_auth
+        .account_for(&user.username)
+        .await
+        .inspect_err(|error| tracing::warn!(%error, "failed to look up the external account"))
+        .unwrap_or_default()
+        .map(|account| ExternalAccountResponse { provider: account.display_name, manage_url: account.manage_url });
+
+    (
+        [(header::CACHE_CONTROL, "private")],
+        Json(MeResponse { username: user.username, role: user.role, external_account }),
+    )
+        .into()
 }
 
 async fn setup(app: State<RouterState>, Json(params): Json<SetupRequest>) -> ApiResult<impl IntoApiResponse> {
