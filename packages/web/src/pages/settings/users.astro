@@ -9,8 +9,9 @@ import Settings from "@/layouts/settings.astro";
     <CreateUser client:only="react" />
   </nav>
   <p class="description">
-    Manage administrator roles. Assign project access in <a href="/settings/teams">Teams</a>. Configure sign-in methods
-    in <a href="/settings/authentication">Authentication settings</a>.
+    Manage administrator roles. Assign project access in <a href="/settings/teams">Teams</a>. Single sign-on providers
+    are configured in the config file, under <code>[oidc.providers]</code>. When a provider has a group mapping, the
+    teams of its SSO-only accounts come from that mapping and are replaced at each sign-in.
   </p>
   <UsersTable client:load />
 </Settings>

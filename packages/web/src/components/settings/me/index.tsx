@@ -16,7 +16,7 @@ export const MyAccount = () => {
 	const confirmPasswordId = useId();
 	const formRef = useRef<HTMLFormElement>(null);
 
-	const { role, username: queriedUsername, authError } = useMe();
+	const { role, username: queriedUsername, externalAccount, authError } = useMe();
 	const username = queriedUsername ?? getUsername();
 	useEffect(() => {
 		if (authError) createToast("You don't have permission to view this page", "error");
@@ -66,51 +66,65 @@ export const MyAccount = () => {
 					</div>
 				</div>
 			</article>
-			<article>
-				<form className={styles.password} onSubmit={updatePassword} ref={formRef}>
-					<h2>Update password</h2>
-					<p>Changing your password signs you out on other devices.</p>
-					<label>
-						Current password *
-						<input
-							required
-							type="password"
-							id={currentPasswordId}
-							name="currentPassword"
-							autoComplete="current-password"
-						/>
-					</label>
-					<label>
-						New password *
-						<input
-							minLength={8}
-							required
-							type="password"
-							id={newPasswordId}
-							name="newPassword"
-							autoComplete="new-password"
-						/>
-					</label>
+			{!role ? null : externalAccount ? (
+				<article>
+					<h2>Sign-in</h2>
+					<p>
+						You sign in through {externalAccount.provider}, so there is no password to change here.{" "}
+						{externalAccount.manageUrl && (
+							<a href={externalAccount.manageUrl} target="_blank" rel="noreferrer">
+								Manage your account at {externalAccount.provider}
+							</a>
+						)}
+					</p>
+				</article>
+			) : (
+				<article>
+					<form className={styles.password} onSubmit={updatePassword} ref={formRef}>
+						<h2>Update password</h2>
+						<p>Changing your password signs you out on other devices.</p>
+						<label>
+							Current password *
+							<input
+								required
+								type="password"
+								id={currentPasswordId}
+								name="currentPassword"
+								autoComplete="current-password"
+							/>
+						</label>
+						<label>
+							New password *
+							<input
+								minLength={8}
+								required
+								type="password"
+								id={newPasswordId}
+								name="newPassword"
+								autoComplete="new-password"
+							/>
+						</label>
 
-					<label>
-						Confirm new password *
-						<input
-							minLength={8}
-							required
-							type="password"
-							id={confirmPasswordId}
-							name="confirmNewPassword"
-							autoComplete="new-password"
-						/>
-					</label>
+						<label>
+							Confirm new password *
+							<input
+								minLength={8}
+								required
+								type="password"
+								id={confirmPasswordId}
+								name="confirmNewPassword"
+								autoComplete="new-password"
+							/>
+						</label>
 
-					<div className={styles.passwordActions}>
-						<button type="submit" className="button-primary" disabled={isPending}>
-							Update password
-						</button>
-					</div>
-				</form>
-			</article>
+						<div className={styles.passwordActions}>
+							<button type="submit" className="button-primary" disabled={isPending}>
+								Update password
+							</button>
+						</div>
+					</form>
+				</article>
+			)}
 		</div>
 	);
 };

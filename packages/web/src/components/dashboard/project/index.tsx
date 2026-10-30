@@ -12,6 +12,7 @@ import { useMetric, useRange } from "@/hooks/persist";
 import { cls } from "@/utils";
 import { CustomEventsCard } from "./custom-events";
 import { DimensionDropdownCard, DimensionTabs, DimensionTabsCard, PageDimensionTabsCard } from "./dimensions";
+import { SelectEntity } from "./entity";
 import { SelectFilters } from "./filter";
 import { LineGraph } from "./graph";
 import { SelectMetrics } from "./metric";
@@ -58,6 +59,8 @@ export const getDimensionFilter = (dimension: Dimension, value: string, property
 		value: value,
 	};
 };
+
+const isEntityFilter = (f: DimensionFilter) => f.dimension === "entity_id" && f.filterType === "equal";
 
 export const Project = () => {
 	const [projectId] = useState(() =>
@@ -180,6 +183,22 @@ export const Project = () => {
 		[filters],
 	);
 
+	const selectedEntityId = useMemo(() => filters.find(isEntityFilter)?.value ?? undefined, [filters]);
+
+	// The entity scope has its own dropdown, so keep it out of the chip row.
+	const chipFilters = useMemo(() => visibleFilters.filter((f) => !isEntityFilter(f)), [visibleFilters]);
+
+	const setSelectedEntity = useCallback((entityId?: string) => {
+		setFilters((prev) => {
+			const rest = prev.filter((f) => !isEntityFilter(f));
+			return entityId ? [...rest, { dimension: "entity_id", filterType: "equal", value: entityId }] : rest;
+		});
+	}, []);
+
+	const onChangeChipFilters = useCallback((next: DimensionFilter[]) => {
+		setFilters((prev) => next.concat(prev.filter(isEntityFilter)));
+	}, []);
+
 	const selectEvent = (name: string) => {
 		setEventName(name);
 		if (name !== "pageview") {
@@ -230,7 +249,12 @@ export const Project = () => {
 			<div className={styles.projectReport}>
 				<div className={styles.projectHeader}>
 					<ProjectHeader project={project} stats={stats} />
-					<SelectRange onSelect={selectRange} range={range} projectId={project.id} />
+					<div className={styles.headerControls}>
+						<SelectRange onSelect={selectRange} range={range} projectId={project.id} />
+						{project.entities.length > 1 && (
+							<SelectEntity entities={project.entities} value={selectedEntityId} onChange={setSelectedEntity} />
+						)}
+					</div>
 				</div>
 				<SelectMetrics
 					className={styles.projectStats}
@@ -244,8 +268,8 @@ export const Project = () => {
 				<SelectFilters
 					eventName={eventName}
 					onClearEvent={() => selectEvent("pageview")}
-					value={visibleFilters}
-					onChange={setFilters}
+					value={chipFilters}
+					onChange={onChangeChipFilters}
 					dimensions={[...dimensions, "property" as const].filter(
 						(dimension) =>
 							!project.hiddenDimensions.includes(dimension) &&

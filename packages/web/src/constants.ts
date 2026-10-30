@@ -17,9 +17,9 @@ export type ApiKeyExpiration = OASModel<DashboardSpec, "ApiKeyExpiration">;
 export type StatsResponse = OASModel<DashboardSpec, "StatsResponse">;
 export type CollectionSettings = OASModel<DashboardSpec, "CollectionSettings">;
 export type ExternalAuthMetadata = OASModel<DashboardSpec, "ExternalAuthMetadata">;
-export type ExternalAuthSettings = OASModel<DashboardSpec, "ExternalAuthSettingsResponse">;
-export type ExternalAuthSettingsUpdate = OASModel<DashboardSpec, "UpdateExternalAuthSettings">;
-export type ExternalAuthProvider = OASModel<DashboardSpec, "ExternalAuthProvider">;
+export type ExternalAuthProviderMetadata = OASModel<DashboardSpec, "ExternalAuthProviderMetadata">;
+export type ProviderKind = OASModel<DashboardSpec, "ProviderKind">;
+export type ExternalAccount = OASModel<DashboardSpec, "ExternalAccountResponse">;
 export type EntityCollectionSettings = OASModel<DashboardSpec, "EntityCollectionSettings">;
 export type ProjectDisplaySettings = OASModel<DashboardSpec, "ProjectDisplaySettings">;
 export type IngestFilter = OASModel<DashboardSpec, "IngestFilter">;
@@ -103,6 +103,7 @@ export const dimensionNames: Record<Dimension, string> = {
 	screen_width: "Screen Width",
 	orientation: "Orientation",
 	property: "Properties",
+	entity_id: "Entity",
 };
 
 export const filterNames: Record<DimensionFilter["filterType"], string> = {

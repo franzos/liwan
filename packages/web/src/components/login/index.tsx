@@ -7,7 +7,7 @@ import { SiGoogle, SiOpenid } from "@icons-pack/react-simple-icons";
 import { api } from "@/api/client";
 import { queryClient } from "@/api/query";
 import { appPath, basePath } from "@/config";
-import type { ExternalAuthMetadata, ExternalAuthProvider } from "@/constants";
+import type { ExternalAuthProviderMetadata, ProviderKind } from "@/constants";
 
 const getReturnTo = () => {
 	if (typeof window === "undefined") return appPath("/");
@@ -20,9 +20,21 @@ const getReturnTo = () => {
 		: appPath("/");
 };
 
-export const ProviderLogo = ({ provider }: { provider: ExternalAuthProvider }) => {
-	if (provider === "google") return <SiGoogle color="#4285f4" aria-hidden="true" />;
-	if (provider === "microsoft")
+// The server keeps the reason for a refusal in its own log and only sends a code.
+const externalAuthErrors: Record<string, string> = {
+	registration_closed: "This account isn't set up yet. Ask an administrator to create it for you.",
+	domain_not_allowed: "Your email domain isn't allowed to sign in here.",
+	email_not_verified: "Your provider didn't confirm a verified email address.",
+	access_denied: "Your account doesn't have access to this instance.",
+	groups_incomplete: "Your provider sent an incomplete group list. Ask an administrator to check the group claim.",
+	provider_error: "Your provider cancelled the sign-in.",
+	state_mismatch: "The sign-in took too long or was interrupted. Please try again.",
+	unavailable: "Sign-in is unavailable right now. Please try again later.",
+};
+
+const ProviderLogo = ({ kind }: { kind: ProviderKind }) => {
+	if (kind === "google") return <SiGoogle color="#4285f4" aria-hidden="true" />;
+	if (kind === "microsoft")
 		return (
 			<svg viewBox="0 0 24 24" aria-hidden="true">
 				<path fill="#f25022" d="M1 1h10v10H1z" />
@@ -34,28 +46,21 @@ export const ProviderLogo = ({ provider }: { provider: ExternalAuthProvider }) =
 	return <SiOpenid color="#f78c40" aria-hidden="true" />;
 };
 
-const providerName = (metadata: ExternalAuthMetadata) => {
-	if (metadata.provider === "google") return "Google";
-	if (metadata.provider === "microsoft") return "Microsoft";
-	return metadata.displayName;
-};
-
 export const LoginPage = () => {
-	const [externalAuth, setExternalAuth] = useState<ExternalAuthMetadata>();
+	const [providers, setProviders] = useState<ExternalAuthProviderMetadata[]>([]);
 	const [error, setError] = useState<string>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 
 	useEffect(() => {
-		if (new URLSearchParams(window.location.search).get("externalAuthError") === "1") {
-			setError("External sign-in failed. Please try again.");
-		}
+		const code = new URLSearchParams(window.location.search).get("externalAuthError");
+		if (code) setError(externalAuthErrors[code] ?? "External sign-in failed. Please try again.");
 
 		let active = true;
 		api["/api/dashboard/auth/external"]
 			.get()
 			.json()
 			.then((metadata) => {
-				if (active && metadata.enabled) setExternalAuth(metadata);
+				if (active) setProviders(metadata.providers);
 			})
 			.catch(() => {});
 		return () => {
@@ -86,17 +91,27 @@ export const LoginPage = () => {
 	return (
 		<section className={styles.page}>
 			<h1>Sign in</h1>
-			{externalAuth && (
-				<div>
-					<a
-						className={`button-secondary ${styles.externalAuth}`}
-						href={appPath(`/api/dashboard/auth/external/start?${new URLSearchParams({ returnTo: getReturnTo() })}`)}
-					>
-						<span className={styles.providerIcon}>
-							<ProviderLogo provider={externalAuth.provider} />
-						</span>
-						Continue with {providerName(externalAuth)}
-					</a>
+			{providers.length > 0 && (
+				<div className={styles.providers}>
+					{providers.map((provider) => (
+						<a
+							key={provider.name}
+							// The client router would fetch the start route first; each request mints a new state cookie.
+							data-astro-reload
+							className={`button-secondary ${styles.externalAuth}`}
+							href={appPath(
+								`/api/dashboard/auth/external/start?${new URLSearchParams({
+									provider: provider.name,
+									returnTo: getReturnTo(),
+								})}`,
+							)}
+						>
+							<span className={styles.providerIcon}>
+								<ProviderLogo kind={provider.kind} />
+							</span>
+							Continue with {provider.displayName}
+						</a>
+					))}
 					<div className={styles.separator}>or</div>
 				</div>
 			)}

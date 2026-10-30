@@ -1,8 +1,7 @@
 .entitySelect {
-	width: auto;
-	min-width: 9rem;
-	max-width: 14rem;
-	margin: 0;
-	--pico-form-element-spacing-vertical: 0.5rem;
-	--pico-form-element-spacing-horizontal: 0.6rem;
+  width: auto;
+  min-width: 9rem;
+  max-width: 14rem;
+  margin: 0;
+  border-radius: var(--radius);
 }

@@ -46,6 +46,12 @@
   }
 }
 
+.headerControls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .projectStats {
   --metric-button-active-background: light-dark(var(--surface), var(--surface-active));
   --metric-button-hover-background: light-dark(color-mix(in srgb, var(--surface) 35%, transparent), #252c38);

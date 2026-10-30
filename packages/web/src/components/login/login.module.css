@@ -24,6 +24,11 @@
   margin: 0;
 }
 
+.providers {
+  display: grid;
+  gap: 0.65rem;
+}
+
 .externalAuth {
   width: 100%;
   display: flex;

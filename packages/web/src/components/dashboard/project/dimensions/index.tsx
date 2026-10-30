@@ -321,6 +321,9 @@ const dimensionLabels: Record<Dimension, (value: DimensionTableRow, onSelect: ()
 			<DimensionValueButton onSelect={onSelect}>{value.dimensionValue}</DimensionValueButton>
 		</>
 	),
+	entity_id: (value, onSelect) => (
+		<DimensionValueButton onSelect={onSelect}>{value.displayName || value.dimensionValue}</DimensionValueButton>
+	),
 	screen_width: (value, onSelect) => (
 		<>
 			<MonitorIcon size={16} />

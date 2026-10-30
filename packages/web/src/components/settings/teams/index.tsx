@@ -161,6 +161,16 @@ const TeamSettingsContent = ({ teamId }: { teamId: string }) => {
 						}}
 					/>
 				</SettingsField>
+				<SettingsField
+					label="Team ID"
+					description={
+						<>
+							Use this in <code>groups.teams</code> or <code>default_team</code> in the config file.
+						</>
+					}
+				>
+					<input value={team.id} readOnly onFocus={(event) => event.currentTarget.select()} />
+				</SettingsField>
 				<Tags
 					labelText="Members"
 					labelDescription="Users in this team receive read access to its projects."
