@@ -2,7 +2,7 @@
 
 <div align="center">
     <h2>
-        <img float="left" src="./web/public/favicon.svg" width="16px"/>
+        <img float="left" src="./packages/web/public/favicon.svg" width="16px"/>
         <a href="https://liwan.dev">liwan.dev</a> - Self-hosted, privacy-first web analytics
     </h2>
 <div>
@@ -82,7 +82,7 @@ Register this redirect URI with every provider (derived from `base_url`):
 
 liwan logs that URI at startup, along with the per-provider back-channel logout and account-deletion URLs, so you don't have to reconstruct them from here.
 
-First-time users are created as regular users with no project access until an admin grants it. Accounts are matched on the provider's subject, so a later email or name change never breaks the link. SSO-only accounts have no password: the settings page hides the password form for them, and the API refuses to set one.
+First-time users are created as regular users in no team, so they see only public and internal projects until an admin adds them to a team or a group mapping does. Accounts are matched on the provider's subject, so a later email or name change never breaks the link. SSO-only accounts have no password: the settings page hides the password form for them, and the API refuses to set one.
 
 The four kinds differ only in what they derive for you:
 
@@ -114,19 +114,28 @@ allowed_domains = ["example.com", "acme.org"]  # optional
 
 Rejections send the person back to the login page with a short explanation; the reason behind it stays in the server log.
 
-#### Mapping groups to roles and projects
+#### Mapping groups to roles and teams
 
-When your provider emits a group claim, liwan can derive the role and project access from it:
+When your provider emits a group claim, liwan can derive the role and team membership from it. Teams carry the project access; create them under Settings, Teams first, then reference them by id:
 
 ```toml
 [oidc.providers.company.groups]
-claim    = "groups"                                           # the claim to read; this is the default
-allowed  = ["analytics"]                                      # optional: must be in one of these to sign in
-admin    = ["liwan-admins"]                                   # members get role admin, everyone else user
-projects = { marketing = ["blog", "docs"], eng = ["app"] }    # group -> project ids
+claim        = "groups"                                   # the claim to read; this is the default
+allowed      = ["analytics"]                              # optional: must be in one of these to sign in
+admin        = ["liwan-admins"]                           # members get role admin, everyone else user
+default_team = "AbC123xyz0987654"                         # optional: everyone signing in through this provider joins it
+teams        = { marketing = ["AbC123xyz0987654", "QrS456uvw1234567"], eng = ["XyZ789abc4567890"] }  # group -> team ids
 ```
 
-Role and projects are rewritten on **every** sign-in, so a group change at the provider takes effect the next time the person logs in, and local edits to such an account do not survive it. Project ids that don't exist are skipped with a warning.
+The team id is the read-only "Team ID" field on each team's settings page (16 letters and digits). Names don't work here: they can be edited and aren't unique.
+
+Role and teams are rewritten on **every** sign-in. A group change at the provider takes effect the next time the person logs in, and team changes made in the UI to such an account don't survive it. Team ids that don't exist are skipped with a warning in the log; the login still goes through. `teams` is file-only; `default_team` also takes an environment override.
+
+When the groups or domain rules turn a login away, the account's sessions end and its team memberships go with them, so someone removed from `allowed` loses access at their next attempt rather than when the session expires. Someone who simply never signs in again keeps their session until `session_duration` runs out (14 days by default); back-channel logout covers that case.
+
+If the provider marks the group list as incomplete (Entra's overage `_claim_names`, or `hasgroups`), the login is refused with its own error, `groups_incomplete`, instead of treating the person as a member of nothing. That only applies when `allowed`, `admin` or `teams` is set; a `default_team`-only mapping doesn't read the list. On Entra, emit group object ids, or use a group filter to keep the claim short.
+
+Map identifiers your users can't create themselves. If the provider sends group display names and lets people create groups, anyone can make a group called `liwan-admins`.
 
 This only ever touches accounts without a local password. An account created locally, or attached with `link-oidc`, is left alone - which is what stops your break-glass admin being demoted by a group that went missing.
 
@@ -168,7 +177,7 @@ If Forseti's discovery document can't be reached, the extras stay off and logins
 
 #### Linking an existing account
 
-To make SSO land on an account that already exists - typically the first admin, created with a password - attach the provider's subject to it. The account keeps its role, projects and password:
+To make SSO land on an account that already exists - typically the first admin, created with a password - attach the provider's subject to it. The account keeps its role, teams and password:
 
 ```
 liwan link-oidc <username> <subject>                      # when one provider is configured
@@ -179,16 +188,20 @@ liwan link-oidc <username> <subject> --replace            # also delete the dupl
 
 The subject is the `sub` claim your provider issues for that person; it usually shows up as the identity ID in the provider's admin UI. `--replace` only removes accounts without a local password - a real account is never collateral.
 
-#### Upgrading from 1.6.0-fork
+#### Upgrading from 1.7.0-fork
 
-The `[oidc]` table of earlier fork releases is gone, and a config that still uses it fails to start with a message naming the replacement. In order:
+This release moves project access onto upstream's teams. Per-user project grants are gone, `groups.projects` is replaced by `groups.teams`, and a config that still has `projects` in a `groups` table refuses to start. In order:
 
-1. **Add the new redirect URI** to your provider, alongside the old `/api/dashboard/auth/oidc/callback`. Both can coexist; remove the old one after the upgrade.
-2. **Rewrite the config.** `[oidc]` becomes `[oidc.providers.<name>]`; `button_label` becomes `display_name`; `LIWAN_OIDC_CLIENT_SECRET` becomes `LIWAN_OIDC_PROVIDERS_<NAME>_CLIENT_SECRET`. `registration = "domain_allowlist"` becomes `registration = "open"` with the same `allowed_domains` - which now applies on every login, not only at sign-up. Keep `issuer` byte-identical to what you have today: existing links are keyed on it.
-3. **Back up the data directory, then start the new binary.** The migration carries your existing links over to the new table. Sessions are untouched, so nobody is signed out.
-4. **Don't configure a `groups` table yet** - not until the matching teams exist at your provider. An SSO-only account you promoted to admin by hand would be demoted at its next sign-in once group mapping is on.
-5. Optionally register `backchannel_logout_uri`, and `account_deletion_url` for `kind = "forseti"`.
+1. **Back up the data directory.** The `V9` migration drops every per-user project grant. Admins keep access through their role; everyone else, SSO accounts included, sees only public projects until step 4 is done and they sign in again.
+2. **Remove `groups.projects` from the config.** Leave `teams` and `default_team` out for now; `claim`, `allowed` and `admin` keep working.
+3. **Start the new binary.** Teams only exist from here on.
+4. **Create the teams** under Settings, Teams, and grant them projects. Copy each team's id from its settings page into `groups.teams` (and `default_team` if you want one), then restart. Membership is written at the next SSO login.
 
+Once a provider has a `groups` table, the team membership of its SSO-only accounts is replaced at every login. So during the upgrade, set up teams and the mapping before adding anyone to a team by hand; a membership added in the UI to such an account is gone at their next sign-in.
+
+The MSRV (1.99), the workspace layout and the root-level `bun` build only matter if you build from source. The container image and release binaries are unaffected.
+
+Upgrading from 1.6.0-fork: follow the v1.7.0-fork.1 entry in the [CHANGELOG](CHANGELOG.md) first.
 
 ### Importing from Matomo
 
@@ -262,7 +275,19 @@ Do expect the numbers to differ from Matomo's own, and from live liwan tracking:
 
 This is a fork of [explodingcamera/liwan](https://github.com/explodingcamera/liwan), adding support for an OIDC/OAuth login flow.
 
-The fork adds its own database migration, numbered in the same sequence as upstream's. Upstream migrations added after the fork point are renumbered on each sync, so a data directory created by an upstream release won't start on the fork: refinery sees a divergent migration history and refuses. Start from an empty data directory, or stay on upstream.
+The fork adds its own database migrations, numbered in the same sequence as upstream's. Upstream migrations added after the fork point are renumbered on each sync, so a data directory created by an upstream release won't start on the fork: refinery sees a divergent migration history and refuses. Start from an empty data directory, or stay on upstream.
+
+| App migration | Origin |
+| ------------- | ------ |
+| `V1__initial`, `V2__settings` | upstream |
+| `V3__oidc` | fork |
+| `V4__project_unlisted`, `V5__entity_allowed_hostnames` | upstream `V3`, `V4` |
+| `V6__external_auth` | fork's version of upstream `V5`, converting the fork's identities |
+| `V7__session_external_sid` | fork |
+| `V8__api_keys` | upstream `V6` |
+| `V9__teams` | upstream `V7` |
+
+Upstream's `V8__external_auth_teams` isn't carried: it extends the database-backed external auth settings, which the fork replaces with the config file.
 
 ## License
 

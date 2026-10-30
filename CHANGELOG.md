@@ -20,7 +20,7 @@ This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-
 
 ## [v1.7.0-fork.1] - 2026-09-15
 
-Synced the fork onto upstream's `v1.7.0` release and rebuilt single sign-on on top of upstream's own external auth. Several identity providers can now be configured at once, and Forseti is supported as a first-class provider. Configuration moved: see "Upgrading from 1.6.0-fork" in the README before upgrading.
+Synced the fork onto upstream's `v1.7.0` release and rebuilt single sign-on on top of upstream's own external auth. Several identity providers can now be configured at once, and Forseti is supported as a first-class provider. Configuration moved: see "Upgrading from 1.6.0-fork" below before upgrading.
 
 ### ⚠️ Breaking Changes
 
@@ -50,6 +50,16 @@ Client IP detection changed upstream: `use_forward_headers` was removed, and for
 ### Other
 
 - Everything else in this release comes from upstream `v1.7.0`, below
+
+### Upgrading from 1.6.0-fork
+
+The `[oidc]` table of earlier fork releases is gone, and a config that still uses it fails to start with a message naming the replacement. In order:
+
+1. **Add the new redirect URI** to your provider, alongside the old `/api/dashboard/auth/oidc/callback`. Both can coexist; remove the old one after the upgrade.
+2. **Rewrite the config.** `[oidc]` becomes `[oidc.providers.<name>]`; `button_label` becomes `display_name`; `LIWAN_OIDC_CLIENT_SECRET` becomes `LIWAN_OIDC_PROVIDERS_<NAME>_CLIENT_SECRET`. `registration = "domain_allowlist"` becomes `registration = "open"` with the same `allowed_domains` - which now applies on every login, not only at sign-up. Keep `issuer` byte-identical to what you have today: existing links are keyed on it.
+3. **Back up the data directory, then start the new binary.** The migration carries your existing links over to the new table. Sessions are untouched, so nobody is signed out.
+4. **Don't configure a `groups` table yet** - not until the matching groups exist at your provider. An SSO-only account you promoted to admin by hand would be demoted at its next sign-in once group mapping is on.
+5. Optionally register `backchannel_logout_uri`, and `account_deletion_url` for `kind = "forseti"`.
 
 ## [v1.6.0-fork.3] - 2026-09-09
 
