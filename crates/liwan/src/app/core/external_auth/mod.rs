@@ -770,8 +770,7 @@ impl LiwanExternalAuth {
     }
 
     /// Ends the sessions and team memberships of the SSO-only account behind an
-    /// identity the policy just turned away. The role stays: with neither it
-    /// grants nothing until the next successful login rewrites it.
+    /// identity the policy just turned away, and drops its role to `user`.
     fn revoke_access(&self, provider_key: &str, subject: &str) -> Result<()> {
         let mut conn = self.pool.get()?;
         let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -791,8 +790,13 @@ impl LiwanExternalAuth {
 
         let sessions = transaction.execute("delete from sessions where lower(username) = lower(?)", [&username])?;
         let teams = transaction.execute("delete from team_users where username = ?", [&username])?;
+        let user = UserRole::User.to_string();
+        let demoted = transaction.execute(
+            "update users set role = ? where username = ? and password_hash is null and role != ?",
+            [&user, &username, &user],
+        )? > 0;
         transaction.commit()?;
-        tracing::info!(%username, sessions, teams, "revoked access after a rejected login");
+        tracing::info!(%username, sessions, teams, demoted, "revoked access after a rejected login");
         Ok(())
     }
 
@@ -1180,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn revoke_access_ends_sessions_and_teams_of_an_sso_only_account() {
+    fn revoke_access_ends_sessions_teams_and_role_of_an_sso_only_account() {
         let app = Liwan::new_memory(Config::default()).unwrap();
         create_teams(&app, &["blogTeam"]);
         let identity = identity("42", Some("person"));
@@ -1191,7 +1195,7 @@ mod tests {
         app.external_auth.revoke_access(&identity.provider_key, &identity.subject).unwrap();
         assert!(app.sessions.get("session").unwrap().is_none());
         assert!(teams_of(&app, &username).is_empty());
-        assert_eq!(app.users.get(&username).unwrap().role, UserRole::Admin, "the role is left for the next login");
+        assert_eq!(app.users.get(&username).unwrap().role, UserRole::User);
     }
 
     #[test]
@@ -1206,6 +1210,7 @@ mod tests {
         app.external_auth.revoke_access("https://issuer.example", "sub-1").unwrap();
         assert!(app.sessions.get("session").unwrap().is_some());
         assert_eq!(teams_of(&app, "franz"), strings(&["blogTeam"]));
+        assert_eq!(app.users.get("franz").unwrap().role, UserRole::Admin);
     }
 
     #[test]

@@ -95,7 +95,7 @@ The four kinds differ only in what they derive for you:
 
 `microsoft` requires `tenant_id` as the tenant UUID - `common` and friends are refused, because they would let any tenant in. `scopes` is only configurable for `kind = "oidc"`; the presets know what their own provider accepts.
 
-Every option also takes an environment override, named `LIWAN_OIDC_PROVIDERS_<NAME>_<KEY>` (for the `groups` sub-table, `LIWAN_OIDC_PROVIDERS_<NAME>_GROUPS_<KEY>`). List values accept a comma-separated string.
+Every option also takes an environment override, named `LIWAN_OIDC_PROVIDERS_<NAME>_<KEY>` (for the `groups` sub-table, `LIWAN_OIDC_PROVIDERS_<NAME>_GROUPS_<KEY>`). List values accept a comma-separated string. Unknown keys in a provider or `groups` table refuse to start, and so does an environment override that sets `groups.allowed` or `allowed_domains` to an empty list (which would otherwise let everyone in). Each issuer can be configured once.
 
 #### Who may sign in
 
@@ -131,7 +131,7 @@ The team id is the read-only "Team ID" field on each team's settings page (16 le
 
 Role and teams are rewritten on **every** sign-in. A group change at the provider takes effect the next time the person logs in, and team changes made in the UI to such an account don't survive it. Team ids that don't exist are skipped with a warning in the log; the login still goes through. `teams` is file-only; `default_team` also takes an environment override.
 
-When the groups or domain rules turn a login away, the account's sessions end and its team memberships go with them, so someone removed from `allowed` loses access at their next attempt rather than when the session expires. Someone who simply never signs in again keeps their session until `session_duration` runs out (14 days by default); back-channel logout covers that case.
+When the groups or domain rules turn a login away, the account's sessions end, its team memberships go and its role drops to `user`, so someone removed from `allowed` loses access at their next attempt rather than when the session expires. Someone who simply never signs in again keeps their session until `session_duration` runs out (14 days by default); back-channel logout covers that case.
 
 If the provider marks the group list as incomplete (Entra's overage `_claim_names`, or `hasgroups`), the login is refused with its own error, `groups_incomplete`, instead of treating the person as a member of nothing. That only applies when `allowed`, `admin` or `teams` is set; a `default_team`-only mapping doesn't read the list. On Entra, emit group object ids, or use a group filter to keep the claim short.
 

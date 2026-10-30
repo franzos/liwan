@@ -186,6 +186,7 @@ pub enum Registration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     #[serde(default)]
     pub kind: ProviderKind,
@@ -281,6 +282,7 @@ impl ProviderConfig {
 
 /// Maps IdP group membership onto liwan roles and team membership.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GroupsConfig {
     #[serde(default = "default_groups_claim")]
     pub claim: String,
@@ -530,6 +532,12 @@ impl Config {
 
         for (key, value) in env_vars {
             if let Some(mapped_key) = map_env_key(key.as_ref()) {
+                if is_empty_allow_list(&mapped_key, value.as_ref()) {
+                    bail!(
+                        "{} is set but lists nothing, which would let everyone in; unset it or name at least one entry",
+                        key.as_ref()
+                    );
+                }
                 builder = builder.set_override(&mapped_key, parse_env_value(&mapped_key, value.as_ref()))?;
             };
         }
@@ -716,6 +724,7 @@ fn reject_legacy_groups(sources: &config::Config) -> Result<()> {
 /// at boot rather than at someone's sign-in.
 fn validate_providers(oidc: &OidcConfig) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
+    let mut issuers: BTreeMap<String, &str> = BTreeMap::new();
     for (name, provider) in &oidc.providers {
         if !is_valid_provider_name(name) {
             bail!(
@@ -771,6 +780,14 @@ fn validate_providers(oidc: &OidcConfig) -> Result<()> {
                 bail!("oidc.providers.{name}.tenant_id is only used by kind = \"microsoft\"")
             }
             _ => {}
+        }
+
+        // Compared as-is: discovery requires the exact configured string and identities key on it.
+        let issuer = provider.issuer_url()?;
+        if let Some(first) = issuers.insert(issuer.clone(), name) {
+            bail!(
+                "oidc.providers.{first} and oidc.providers.{name} both use issuer {issuer}; each issuer can be configured once"
+            );
         }
 
         // The preset kinds request a fixed scope set, so a configured one is a
@@ -934,6 +951,21 @@ fn map_provider_env_key(rest: &str) -> Option<String> {
         None => key.to_string(),
     };
     Some(format!("oidc.providers.{name}.{key}"))
+}
+
+/// The list parsers drop empty items, so an empty value would replace the file's list with no restriction.
+fn is_empty_allow_list(key: &str, value: &str) -> bool {
+    if !key.starts_with("oidc.providers.") {
+        return false;
+    }
+    let mut items = value.split(',').map(str::trim);
+    if key.ends_with(".allowed_domains") {
+        items.all(|item| item.trim_end_matches('.').is_empty())
+    } else if key.ends_with(".groups.allowed") {
+        items.all(str::is_empty)
+    } else {
+        false
+    }
 }
 
 fn parse_env_value(key: &str, value: &str) -> Value {
@@ -1637,6 +1669,69 @@ mod test {
         let error = load_provider(r#"registration = "domain_allowlist""#).unwrap_err();
         assert!(error.to_string().contains("no longer a mode"), "got: {error}");
         assert!(error.to_string().contains("allowed_domains"), "got: {error}");
+    }
+
+    fn load_two_providers(first: &str, second: &str) -> Result<Config> {
+        let content = format!(
+            r#"
+                base_url = "https://example.com"
+                [oidc.providers.first]
+                client_id = "liwan"
+                client_secret = "shhh"
+                {first}
+                [oidc.providers.second]
+                client_id = "liwan"
+                client_secret = "shhh"
+                {second}
+            "#
+        );
+        let (_dir, path) = temp_config("liwan-two-issuers.config.toml", &content);
+        Config::load(Some(path), Vec::<(String, String)>::new())
+    }
+
+    #[test]
+    fn oidc_rejects_a_duplicate_issuer() {
+        let issuer = r#"issuer = "https://idp.example.com""#;
+        let error = load_two_providers(issuer, issuer).unwrap_err().to_string();
+        assert!(error.contains("oidc.providers.first and oidc.providers.second"), "got: {error}");
+        assert!(error.contains("https://idp.example.com"), "got: {error}");
+        assert!(error.contains("each issuer can be configured once"), "got: {error}");
+
+        let google = r#"kind = "google""#;
+        let error = load_two_providers(google, google).unwrap_err().to_string();
+        assert!(error.contains("https://accounts.google.com"), "got: {error}");
+
+        assert!(load_two_providers(issuer, r#"issuer = "https://idp.partner.example""#).is_ok());
+        assert!(load_two_providers(issuer, google).is_ok());
+    }
+
+    #[test]
+    fn oidc_rejects_unknown_keys() {
+        let error = load_provider(r#"alowed_domains = ["example.com"]"#).unwrap_err();
+        assert!(error.to_string().contains("`alowed_domains`"), "got: {error}");
+
+        let error = load_provider("[oidc.providers.company.groups]\nalowed = [\"analytics\"]").unwrap_err();
+        assert!(error.to_string().contains("`alowed`"), "got: {error}");
+
+        let error = load_provider("[oidc.providers.company.group]\nallowed = [\"analytics\"]").unwrap_err();
+        assert!(error.to_string().contains("`group`"), "got: {error}");
+    }
+
+    #[test]
+    fn oidc_rejects_an_empty_allow_list_from_the_env() {
+        let cases = [
+            ("LIWAN_OIDC_PROVIDERS_COMPANY_GROUPS_ALLOWED", ""),
+            ("LIWAN_OIDC_PROVIDERS_COMPANY_GROUPS_ALLOWED", " , ,"),
+            ("LIWAN_OIDC_PROVIDERS_COMPANY_ALLOWED_DOMAINS", ""),
+            ("LIWAN_OIDC_PROVIDERS_COMPANY_ALLOWED_DOMAINS", ", ."),
+        ];
+        for (key, value) in cases {
+            let error = Config::load(None, vec![(key, value)]).unwrap_err();
+            assert!(error.to_string().contains(key), "{key}={value:?} got: {error}");
+        }
+
+        let config = load_provider("[oidc.providers.company.groups]\nallowed = []").unwrap();
+        assert!(config.oidc.get("company").unwrap().groups.as_ref().unwrap().allowed.is_empty());
     }
 
     #[test]
