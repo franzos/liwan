@@ -18,6 +18,39 @@ Since this is not a library, this changelog focuses on the changes that are rele
 This is a fork of explodingcamera/liwan. Fork releases are versioned `<upstream-base>-fork.<N>` (e.g. `1.6.0-fork.1`); `N` resets to 1 on each upstream sync. Each `-fork.N` entry lists only the fork's own changes on top of that upstream base; everything else comes from the corresponding upstream release, documented further below.
 -->
 
+## [v1.8.2-fork.1] - 2026-10-30
+
+Synced the fork onto upstream's `v1.8.2` release. Project access now runs through upstream's teams, and SSO group mapping assigns teams instead of projects. Read "Upgrading from 1.7.0-fork" in the README before upgrading.
+
+### ⚠️ Breaking Changes
+
+`groups.projects` is replaced by `groups.teams` (group to team ids) and `groups.default_team`. A config that still has `projects` in a `groups` table refuses to start. Teams are referenced by id: create them under Settings, Teams first and copy the Team ID from there.
+
+Per-user project access is gone. The `V9` migration drops every per-user grant; admins keep access through their role, everyone else sees only public projects until they're in a team.
+
+Unknown keys in a provider or `groups` table now refuse to start, as does an environment override that sets `groups.allowed` or `allowed_domains` to an empty list. Two providers with the same issuer refuse to start.
+
+### Features
+
+- `default_team`: everyone signing in through a provider joins it
+- Team membership of SSO-only accounts is written on every sign-in
+- Team ID on the team settings page
+- `groups_incomplete` sign-in error when the provider marks the group list as incomplete (Entra overage)
+
+### Security
+
+- A login rejected by the group or domain rules ends the account's sessions, removes its team memberships and resets its role to user
+
+### Bug Fixes
+
+- SSO from the login page failed with "The sign-in took too long or was interrupted" because the page router requested the start URL twice
+
+### Other
+
+- The fork's own events card and event selector are replaced by upstream's custom events and properties; the entity selector stays
+- Live visitor ids follow upstream's new hashing and don't continue across the upgrade; imported Matomo visitor ids are unchanged
+- Everything else in this release comes from upstream `v1.8.0` to `v1.8.2`, below
+
 ## [v1.7.0-fork.1] - 2026-09-15
 
 Synced the fork onto upstream's `v1.7.0` release and rebuilt single sign-on on top of upstream's own external auth. Several identity providers can now be configured at once, and Forseti is supported as a first-class provider. Configuration moved: see "Upgrading from 1.6.0-fork" below before upgrading.
@@ -162,6 +195,48 @@ These come from upstream `main` past the `v1.5.0` tag and ship in this fork's bu
 - Documentation for collected data, collection settings, cookie banners, and projects/entities, plus general docs-site updates
 
 > The `liwan-tracker` npm package is intended for current Liwan server releases. Its network protocol may change between Liwan versions. When it does, update the npm tracker alongside Liwan. If you use the tracker script served by Liwan itself, it already uses the matching internal tracker version.
+
+## [v1.8.2] - 2026-10-29
+
+### Bug Fixes
+
+- Fixed automatic MaxMind database updates failing when metadata contains numeric timestamps.
+
+## [v1.8.1] - 2026-10-23
+
+### Security
+
+- Updated TLS root certificates to remove distrusted eMudhra certificate authorities and updated `zip` following a reported CVE. Neither issue is known to affect Liwan directly.
+
+### Other
+
+- Updated other Rust and JavaScript dependencies.
+
+## [v1.8.0] - 2026-10-17
+
+### ⚠️ Breaking Changes
+
+- Direct per-user project assignments no longer grant access. Reassign users to teams to restore private-project access.
+- The tracker npm package is moving from `liwan-tracker` to `@liwan.dev/tracker`. Update package dependencies and imports. The old package remains available but will not receive new releases.
+
+### Features
+
+- Bounce-rate and average-time metrics now omit low-sample values from summary cards and breakdowns, with configurable minimum counts under `[limits]`.
+- Added support for custom events
+- Added support for custom properties
+- Added tracker-wide custom properties and a hook to customize events before sending them
+- Added authenticated batch event ingestion endpoint
+- Added API key management UI
+- Added a configurable maximum session duration
+- Added drag-to-select custom date ranges on project graphs with automatic resolution and double-click undo
+- Added selectable hourly, daily, weekly, and monthly dashboard graph intervals
+- Added left and right arrow keyboard shortcuts for navigating dashboard date ranges
+- Added teams for assigning project read access to groups of users
+- Added internal project visibility for all signed-in users
+- Added automatic team assignment for new SSO accounts
+- Added support for hosting Liwan under a sub-path in `base_url`
+- Added configurable dashboard footer links and custom HTML in the page head
+- Various UI improvements and tweaks, no longer using PicoCSS
 
 ## [v1.7.0] - 2026-09-13
 
