@@ -19,7 +19,7 @@ jobs:
       matrix:
         os:
           - ubuntu-26.04
-          - macos-26
+          - macos-latest
     name: Run tests on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     steps:
