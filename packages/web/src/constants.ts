@@ -1,0 +1,126 @@
+import type { NormalizeOAS, OASModel } from "fets";
+
+import type dashboardspec from "./api/dashboard";
+
+export type DashboardSpec = NormalizeOAS<typeof dashboardspec>;
+export type Metric = OASModel<DashboardSpec, "Metric">;
+export type GraphInterval = OASModel<DashboardSpec, "GraphInterval">;
+export type Dimension = OASModel<DashboardSpec, "Dimension">;
+export type DimensionFilter = OASModel<DashboardSpec, "DimensionFilter">;
+export type DimensionTableRow = OASModel<DashboardSpec, "DimensionTableRow">;
+export type FilterType = OASModel<DashboardSpec, "FilterType">;
+export type GraphResponse = OASModel<DashboardSpec, "GraphResponse">;
+export type ProjectResponse = OASModel<DashboardSpec, "ProjectResponse">;
+export type ProjectVisibility = OASModel<DashboardSpec, "ProjectVisibility">;
+export type ApiKey = OASModel<DashboardSpec, "ApiKeyResponse">;
+export type ApiKeyExpiration = OASModel<DashboardSpec, "ApiKeyExpiration">;
+export type StatsResponse = OASModel<DashboardSpec, "StatsResponse">;
+export type CollectionSettings = OASModel<DashboardSpec, "CollectionSettings">;
+export type ExternalAuthMetadata = OASModel<DashboardSpec, "ExternalAuthMetadata">;
+export type ExternalAuthSettings = OASModel<DashboardSpec, "ExternalAuthSettingsResponse">;
+export type ExternalAuthSettingsUpdate = OASModel<DashboardSpec, "UpdateExternalAuthSettings">;
+export type ExternalAuthProvider = OASModel<DashboardSpec, "ExternalAuthProvider">;
+export type EntityCollectionSettings = OASModel<DashboardSpec, "EntityCollectionSettings">;
+export type ProjectDisplaySettings = OASModel<DashboardSpec, "ProjectDisplaySettings">;
+export type IngestFilter = OASModel<DashboardSpec, "IngestFilter">;
+export type IngestDropRule = OASModel<DashboardSpec, "IngestDropRule">;
+export type VisitorGroupMode = CollectionSettings["visitorGroupMode"];
+export type GeoDetail = CollectionSettings["trackGeo"];
+export type DataRetention = CollectionSettings["dataRetention"] | EntityCollectionSettings["dataRetention"];
+export type DisplayOverride = ProjectDisplaySettings["metricDisplayOverrides"][string];
+
+export const dimensions = [
+	"platform",
+	"browser",
+	"url",
+	"url_entry",
+	"url_exit",
+	"path",
+	"mobile",
+	"referrer",
+	"city",
+	"country",
+	"fqdn",
+	"utm_campaign",
+	"utm_content",
+	"utm_medium",
+	"utm_source",
+	"utm_term",
+	"screen_width",
+	"orientation",
+] as const satisfies Dimension[];
+
+export const metrics = [
+	"views",
+	"unique_visitors",
+	"avg_time_on_site",
+	"bounce_rate",
+] as const satisfies readonly Metric[];
+
+export const displayOverrides = ["auto", "show", "hide"] as const satisfies readonly DisplayOverride[];
+
+export const visitorGroupModes = [
+	"accurate",
+	"random_per_request",
+	"network_standard",
+	"network_balanced",
+	"network_accurate",
+] as const satisfies readonly VisitorGroupMode[];
+
+export const geoDetails = ["none", "country", "city"] as const satisfies readonly GeoDetail[];
+
+export const ingestDimensions = ["event", ...dimensions] as const;
+
+export const metricNames: Record<Metric, string> = {
+	views: "Total Views",
+	unique_visitors: "Unique Visitors",
+	avg_time_on_site: "Avg Time on Site",
+	bounce_rate: "Bounce Rate",
+};
+
+export const eventMetricName = (metric: Metric, eventName: string) => {
+	if (eventName === "pageview") return metricNames[metric];
+	return metric === "views" ? "Completions" : metric === "unique_visitors" ? "Uniques" : metricNames[metric];
+};
+
+export const dimensionNames: Record<Dimension, string> = {
+	platform: "Platform",
+	browser: "Browser",
+	url: "Page",
+	url_entry: "Entry Page",
+	url_exit: "Exit Page",
+	path: "Path",
+	mobile: "Device Type",
+	referrer: "Referrer",
+	city: "City",
+	country: "Country",
+	fqdn: "Domain",
+	utm_campaign: "Campaign",
+	utm_content: "Content",
+	utm_medium: "Medium",
+	utm_source: "Source",
+	utm_term: "Term",
+	screen_width: "Screen Width",
+	orientation: "Orientation",
+	property: "Properties",
+};
+
+export const filterNames: Record<DimensionFilter["filterType"], string> = {
+	contains: "contains",
+	equal: "equals",
+	is_null: "is null",
+	ends_with: "ends with",
+	is_false: "is false",
+	is_true: "is true",
+	starts_with: "starts with",
+};
+
+export const filterNamesInverted: Record<DimensionFilter["filterType"], string> = {
+	contains: "does not contain",
+	equal: "is not",
+	is_null: "is not null",
+	ends_with: "does not end with",
+	is_false: "is not false",
+	is_true: "is not true",
+	starts_with: "does not start with",
+};

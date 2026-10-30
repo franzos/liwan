@@ -1,0 +1,8 @@
+---
+import { MyAccount } from "@/components/settings/me";
+import Settings from "@/layouts/settings.astro";
+---
+
+<Settings title="My Account">
+  <MyAccount client:only="react" />
+</Settings>

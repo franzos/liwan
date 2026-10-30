@@ -1,0 +1,60 @@
+.new {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  animation: newLoad 0.4s ease;
+}
+
+.new,
+.new:hover {
+  border: 0;
+  background: transparent;
+  color: var(--text-icon);
+  box-shadow: none;
+}
+
+.switchLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.switchLabel > input {
+  flex: 0 0 auto;
+  margin-top: 0.05rem !important;
+}
+
+.switchLabel > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.switchLabel small {
+  margin: 0 !important;
+}
+
+.new:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.new:hover {
+  color: var(--text-icon);
+  opacity: 0.68;
+}
+
+@keyframes newLoad {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new {
+    animation: none;
+  }
+}

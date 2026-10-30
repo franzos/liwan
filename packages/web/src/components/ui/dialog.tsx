@@ -1,0 +1,57 @@
+import styles from "./dialog.module.css";
+
+import type { ReactElement } from "react";
+import { Dialog as Dia } from "@base-ui/react";
+
+import { cls } from "@/utils";
+
+export type DialogProps = {
+	title: string;
+	description?: string;
+	hideDescription?: boolean;
+	trigger?: ReactElement | false;
+	children: React.ReactNode;
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
+	className?: string;
+	hideTitle?: boolean;
+	autoOverflow?: boolean;
+};
+
+export const Dialog = ({
+	title,
+	description,
+	hideDescription,
+	trigger,
+	children,
+	open,
+	onOpenChange,
+	className,
+	hideTitle,
+	autoOverflow,
+}: DialogProps) => {
+	return (
+		<Dia.Root open={open} onOpenChange={onOpenChange}>
+			{trigger && <Dia.Trigger nativeButton={trigger.type === "button"} render={trigger} />}
+			<Dia.Portal>
+				<Dia.Backdrop className={styles.overlay} />
+
+				<Dia.Viewport className={styles.viewport}>
+					<Dia.Popup className={cls(styles.content, autoOverflow && styles.autoOverflow, className)}>
+						<Dia.Title className={styles.title} hidden={hideTitle}>
+							{title}
+						</Dia.Title>
+						{description && (
+							<Dia.Description hidden={hideDescription} className={styles.description}>
+								{description}
+							</Dia.Description>
+						)}
+						{children}
+					</Dia.Popup>
+				</Dia.Viewport>
+			</Dia.Portal>
+		</Dia.Root>
+	);
+};
+
+Dialog.Close = Dia.Close;

@@ -1,0 +1,16 @@
+---
+import type { GetStaticPaths } from "astro";
+
+import { UserSettingsPage } from "@/components/settings/users";
+import Settings from "@/layouts/settings.astro";
+
+export const getStaticPaths = (() => {
+	return [{ params: { username: "user" } }];
+}) satisfies GetStaticPaths;
+
+const { username } = Astro.params;
+---
+
+<Settings title="User Settings">
+  <UserSettingsPage username={username ?? ""} client:load />
+</Settings>

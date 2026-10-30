@@ -1,0 +1,259 @@
+use crate::app::models::Event;
+use chrono::{DateTime, Duration, Utc};
+use rand::RngExt;
+
+const PATHS: &[&str] = &["/", "/about", "/contact", "/pricing", "/blog", "/login", "/signup"];
+const CUSTOM_EVENTS: &[(&str, &[&str])] = &[
+    ("signup", &["/signup"]),
+    ("login", &["/login"]),
+    ("purchase", &["/pricing"]),
+    ("checkout_started", &["/pricing"]),
+    ("add_to_cart", &["/pricing"]),
+    ("download", &["/blog"]),
+    ("newsletter_subscribed", &["/blog", "/"]),
+    ("trial_started", &["/pricing", "/signup"]),
+    ("contact_form_submitted", &["/contact"]),
+    ("video_played", &["/blog"]),
+    ("search", &["/", "/blog"]),
+    ("share", &["/blog"]),
+];
+const REFERRERS: &[&str] = &["", "google.com", "twitter.com", "liwan.dev", "example.com", "henrygressmann.de"];
+const PLATFORMS: &[&str] = &["", "Windows", "macOS", "Linux", "Android", "iOS"];
+const BROWSERS: &[&str] = &["", "Chrome", "Firefox", "Safari", "Edge", "Opera"];
+const CITIES: &[(&str, &str)] = &[
+    ("", ""),
+    ("Paris", "FR"),
+    ("London", "GB"),
+    ("Berlin", "DE"),
+    ("Frankfurt", "DE"),
+    ("New York", "US"),
+    ("San Francisco", "US"),
+    ("Tokyo", "JP"),
+    ("Sydney", "AU"),
+];
+const UTM_CAMPAIGNS: &[&str] = &["", "summer_sale", "black_friday", "christmas", "new_year"];
+const UTM_CONTENTS: &[&str] = &["", "banner", "sidebar", "footer", "popup"];
+const UTM_MEDIUMS: &[&str] = &["", "cpc", "organic", "referral", "email"];
+const UTM_SOURCES: &[&str] = &["", "google", "bing", "facebook", "twitter"];
+const UTM_TERMS: &[&str] = &["", "liwan", "analytics", "tracking", "web"];
+const SCREEN_WIDTH_BUCKETS: &[&str] = &["xs", "sm", "md", "lg", "xl", "2xl"];
+const ORIENTATIONS: &[&str] = &["portrait", "landscape"];
+// Values are ordered from most to least common, and an empty value leaves the property unset.
+const PROPERTIES: &[(&str, &str, &[&str])] = &[
+    ("pageview", "theme", &["light", "dark", ""]),
+    ("pageview", "logged_in", &["false", "true"]),
+    ("pageview", "docs_version", &["", "", "", "v2", "v1"]),
+    ("login", "method", &["password", "google", "github", "sso"]),
+    ("signup", "plan", &["free", "pro", "team"]),
+    ("signup", "source", &["pricing_page", "homepage", "blog_post", "docs"]),
+    ("trial_started", "plan", &["pro", "team"]),
+    ("checkout_started", "plan", &["pro", "team", "enterprise"]),
+    ("checkout_started", "billing", &["yearly", "monthly"]),
+    ("add_to_cart", "item", &["pro_plan", "extra_seats", "team_plan", "priority_support"]),
+    ("purchase", "plan", &["pro", "team", "enterprise"]),
+    ("purchase", "billing", &["yearly", "monthly"]),
+    ("purchase", "seats", &["1", "2", "5", "3", "10", "25", "50"]),
+    ("purchase", "coupon", &["", "", "", "LAUNCH20", "BLACKFRIDAY"]),
+    ("download", "file", &["whitepaper.pdf", "pricing-guide.pdf", "brand-kit.zip", "report-2025.pdf"]),
+    ("newsletter_subscribed", "list", &["weekly_digest", "product_updates", "engineering"]),
+    ("contact_form_submitted", "topic", &["sales", "support", "partnership", "press"]),
+    ("video_played", "video", &["product_tour", "getting_started", "customer_story"]),
+    ("video_played", "autoplay", &["false", "true"]),
+    ("search", "results", &["1-10", "10+", "0"]),
+    ("search", "section", &["docs", "blog", "changelog"]),
+    ("share", "network", &["x", "linkedin", "copy_link", "email", "reddit"]),
+];
+
+pub fn random_events(
+    time_range: (DateTime<Utc>, DateTime<Utc>),
+    entity_id: &str,
+    fqdn: &str,
+    count: usize,
+) -> impl Iterator<Item = Event> {
+    let mut rng = rand::rng();
+    let mut generated = 0usize;
+    let entity_id = entity_id.to_string();
+    let fqdn = fqdn.to_string();
+
+    // Keep the visitor pool relatively small compared to event count so we
+    // get session continuity instead of switching visitors constantly.
+    // Use count/20 but cap to a reasonable ceiling to avoid huge visitor pools.
+    let mut visitors_count = (count / 20).max(1);
+    visitors_count = visitors_count.min(100_000);
+    let visitor_ids: Vec<String> = (0..visitors_count).map(|_| rng.random::<u64>().to_string()).collect();
+
+    let total_seconds = (time_range.1 - time_range.0).num_seconds().max(1) as f64;
+    // (mean_interval is computed below for streaming inter-arrival sampling)
+
+    let jitter = (rng.random_range(0.0..1.0) * 0.02 * total_seconds) as i64;
+    let mut current_time = time_range.0 + Duration::seconds(jitter);
+
+    let mut current_visitor_idx: Option<usize> = None;
+
+    std::iter::from_fn(move || {
+        if generated >= count {
+            return None;
+        }
+
+        let remaining_events = (count - generated) as f64;
+        let rem_seconds = (time_range.1 - current_time).num_seconds().max(0) as f64;
+        if rem_seconds <= 0.0 {
+            return None;
+        }
+
+        let target_mean = (rem_seconds / remaining_events).max(0.001);
+
+        let next_visitor_idx = if let Some(idx) = current_visitor_idx {
+            if rng.random_range(0.0f64..1.0f64) < 0.85f64 {
+                idx
+            } else {
+                (rng.random::<u64>() as usize) % visitor_ids.len()
+            }
+        } else {
+            (rng.random::<u64>() as usize) % visitor_ids.len()
+        };
+        let is_switch = match current_visitor_idx {
+            Some(prev) => next_visitor_idx != prev,
+            None => true,
+        };
+
+        let u1 = rng.random_range(1e-12f64..1.0f64);
+        let u2 = rng.random_range(0.0f64..1.0f64);
+        let z = (-2.0f64 * u1.ln()).sqrt() * (2.0f64 * std::f64::consts::PI * u2).cos();
+        let sigma = 0.5f64;
+        let mut multiplier = (sigma * z).exp();
+        multiplier = multiplier.clamp(0.5f64, 2.5f64);
+
+        let mut inter_s = target_mean * multiplier;
+
+        if is_switch && rng.random_range(0.0f64..1.0f64) < 0.10f64 {
+            inter_s += rng.random_range(10.0f64..300.0f64);
+        }
+
+        let adv_ms = (inter_s * 1000.0).round() as i64;
+        current_time += Duration::milliseconds(adv_ms.max(1));
+
+        if current_time > time_range.1 {
+            return None;
+        }
+
+        let visitor_idx = next_visitor_idx;
+        current_visitor_idx = Some(visitor_idx);
+        generated += 1;
+
+        let (event, path) = if rng.random_bool(0.1) {
+            // Favor common events while leaving rare events in the demo data.
+            let (name, paths) = *random_el(CUSTOM_EVENTS, -1.5);
+            (name, paths[rng.random_range(0..paths.len())])
+        } else {
+            ("pageview", *random_el(PATHS, 0.8))
+        };
+        let referrer = random_el(REFERRERS, 0.9);
+        let platform = random_el(PLATFORMS, -0.3);
+        let browser = random_el(BROWSERS, 0.0);
+        let mobile = rng.random_bool(0.48);
+        let (city, country) = random_el(CITIES, 0.8);
+        let screen_width = random_el(SCREEN_WIDTH_BUCKETS, 0.0);
+        let orientation = random_el(ORIENTATIONS, 0.0);
+        let properties = PROPERTIES
+            .iter()
+            .filter(|(name, _, _)| *name == event)
+            .map(|(_, key, values)| (key.to_string(), random_el(values, -0.8).to_string()))
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
+
+        Some(Event {
+            browser: if browser.is_empty() { None } else { Some(browser.to_string()) },
+            city: if city.is_empty() { None } else { Some(city.to_string()) },
+            country: if country.is_empty() { None } else { Some(country.to_string()) },
+            created_at: current_time,
+            entity_id: entity_id.clone(),
+            event: event.to_string(),
+            fqdn: Some(fqdn.clone()),
+            mobile: Some(mobile),
+            platform: if platform.is_empty() { None } else { Some(platform.to_string()) },
+            referrer: if referrer.is_empty() { None } else { Some(referrer.to_string()) },
+            path: Some(path.to_string()),
+            visitor_group_id: visitor_ids[visitor_idx].clone(),
+            utm_campaign: Some(random_el(UTM_CAMPAIGNS, 0.6).to_string()),
+            utm_content: Some(random_el(UTM_CONTENTS, 0.6).to_string()),
+            utm_medium: Some(random_el(UTM_MEDIUMS, 0.6).to_string()),
+            utm_source: Some(random_el(UTM_SOURCES, 0.6).to_string()),
+            utm_term: Some(random_el(UTM_TERMS, 0.6).to_string()),
+            screen_width: Some(screen_width.to_string()),
+            orientation: Some(orientation.to_string()),
+            properties,
+            track_sessions: true,
+        })
+    })
+}
+
+fn random_el<T>(slice: &[T], scale: f64) -> &T {
+    let mut rng = rand::rng();
+    let len = slice.len();
+
+    assert!(len != 0, "Cannot choose from an empty slice");
+
+    let uniform_random: f64 = rng.random();
+    let weighted_random = (uniform_random.powf(1.0 - scale)).min(1.0);
+    let index = (weighted_random * (len as f64)) as usize;
+    &slice[index.min(len - 1)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_counts_and_order() {
+        let start = Utc::now();
+        let end = start + Duration::hours(6);
+        let want = 2_000usize;
+
+        let events: Vec<_> = random_events((start, end), "entity", "example.com", want).collect();
+        let got = events.len();
+
+        let custom_events: std::collections::HashSet<_> =
+            events.iter().filter(|event| event.event != "pageview").map(|event| event.event.as_str()).collect();
+        assert!(custom_events.len() > 6, "seed should populate the events details view");
+        let signups = events.iter().filter(|event| event.event == "signup").count();
+        let shares = events.iter().filter(|event| event.event == "share").count();
+        assert!(signups > shares * 3, "seed should have noticeably different event counts");
+        for event in &events {
+            if event.event != "pageview" {
+                let (_, paths) = CUSTOM_EVENTS.iter().find(|(name, _)| *name == event.event).unwrap();
+                assert!(paths.contains(&event.path.as_deref().unwrap()), "{} on unexpected path", event.event);
+            }
+        }
+
+        assert!(
+            got >= (want as f64 * 0.7) as usize && got <= (want as f64 * 1.3) as usize,
+            "generated {} events, expected ≈{} (±30%)",
+            got,
+            want
+        );
+
+        for (i, pair) in events.windows(2).enumerate() {
+            let prev = &pair[0];
+            let next = &pair[1];
+            assert!(
+                next.created_at >= prev.created_at,
+                "events not ordered at idx {}: {} before {}",
+                i + 1,
+                prev.created_at,
+                next.created_at
+            );
+        }
+
+        if events.len() >= 2 {
+            let mut last_ms = events[0].created_at.timestamp_millis();
+            let mut intervals = std::collections::HashSet::new();
+            for ev in &events[1..] {
+                let now_ms = ev.created_at.timestamp_millis();
+                intervals.insert((now_ms - last_ms).abs());
+                last_ms = now_ms;
+            }
+            assert!(intervals.len() > 1, "intervals show no variance");
+        }
+    }
+}

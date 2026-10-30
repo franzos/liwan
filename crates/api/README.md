@@ -1,0 +1,33 @@
+# liwan-api
+
+Rust client for the [Liwan](https://liwan.dev) API.
+
+**Experimental:** This client and the Liwan API are not stable yet. Their interfaces may change in future releases.
+
+# Usage
+
+```rust
+use liwan_api::Client;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::builder(
+        "https://liwan.example.com",
+        std::env::var("LIWAN_API_KEY")?,
+        reqwest::Client::new(),
+    )?
+    .build_tokio()?;
+
+    client.event("my-entity-id", liwan_api::Event::pageview("https://example.com/docs"))?;
+    client.shutdown().await?;
+    Ok(())
+}
+```
+
+See [examples/](examples/) and the [API documentation](https://docs.rs/liwan-api).
+
+## License
+
+Licensed under the [Apache License, Version 2.0](https://github.com/explodingcamera/liwan/blob/main/LICENSE.md).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Liwan by you, as defined in the Apache-2.0 license, shall be licensed under Apache-2.0, without any additional terms or conditions.

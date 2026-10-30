@@ -1,0 +1,95 @@
+.snippet {
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-control);
+  background: var(--field);
+}
+
+.snippet code {
+  display: block;
+  min-width: 0;
+  padding: 0.9rem 3rem 0.9rem 0.9rem;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 82%, var(--text-muted));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-weight: 500;
+}
+
+.value {
+  width: 100%;
+  height: auto;
+  margin: 0;
+  padding: 0.7rem 3rem 0.7rem 0.9rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 82%, var(--text-muted));
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  box-shadow: none;
+}
+
+.value:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.tag {
+  color: var(--text-icon);
+  font-weight: 650;
+}
+
+.entity {
+  display: inline;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-style: normal;
+  color: var(--text-icon);
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.16em;
+  box-shadow: none;
+}
+
+.copyButton {
+  position: absolute;
+  top: 50%;
+  right: 0.45rem;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  opacity: 0.68;
+  box-shadow: none;
+}
+
+.copyButton:hover {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  opacity: 1;
+  box-shadow: none;
+}
+
+.copyButton:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

@@ -1,0 +1,71 @@
+import styles from "../dialogs.module.css";
+
+import type { SubmitEvent } from "react";
+import { navigate } from "astro:transitions/client";
+import { PlusIcon } from "lucide-react";
+
+import { api, useMutation } from "@/api";
+import { Dialog } from "@/components/ui/dialog";
+import { createToast } from "@/components/ui/toast";
+import { appPath } from "@/config";
+import { invalidateEntities, useMe } from "@/hooks/api";
+import { SettingsField } from "../form";
+
+export const CreateEntity = () => {
+	const { role } = useMe();
+	const { mutate } = useMutation({
+		mutationFn: api["/api/dashboard/entity"].post,
+		onSuccess: (_res, variables) => {
+			createToast("Entity created", "success");
+			invalidateEntities();
+			navigate(appPath(`/settings/entities/${variables.json.id}`));
+		},
+		onError: (error) => createToast(error.message, "error"),
+	});
+
+	const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const { id, displayName } = Object.fromEntries(new FormData(event.currentTarget)) as {
+			id: string;
+			displayName: string;
+		};
+		mutate({ json: { id, displayName, projects: [] } });
+	};
+
+	if (role !== "admin") return null;
+
+	return (
+		<Dialog
+			title="Create a new entity"
+			description="Entities represent websites, apps, or services that send analytics events."
+			trigger={
+				<button type="button" className={styles.new} aria-label="Create entity" title="Create entity">
+					<PlusIcon size={24} strokeWidth={2.25} />
+				</button>
+			}
+		>
+			<form onSubmit={handleSubmit}>
+				<SettingsField label="Entity ID *" description="Used in the tracking snippet and cannot be changed.">
+					<input
+						required
+						pattern="^[A-Za-z0-9_\-.]{1,40}$"
+						name="id"
+						type="text"
+						placeholder="my-website"
+						autoComplete="off"
+					/>
+				</SettingsField>
+				<SettingsField label="Entity name *" description="Identifies this entity in the dashboard.">
+					<input required name="displayName" type="text" placeholder="My Website" autoComplete="off" />
+				</SettingsField>
+				<div className="action-row">
+					<Dialog.Close className="button-secondary">Cancel</Dialog.Close>
+					<button type="submit" className="button-primary">
+						Create entity
+					</button>
+				</div>
+			</form>
+		</Dialog>
+	);
+};

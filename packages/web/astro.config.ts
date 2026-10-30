@@ -1,0 +1,80 @@
+import path from "node:path";
+import react from "@astrojs/react";
+import type { AstroIntegration } from "astro";
+import { defineConfig, fontProviders } from "astro/config";
+import license from "rollup-plugin-license";
+
+const dirname = path.dirname(new URL(import.meta.url).pathname);
+
+const proxy = {
+	"/api": {
+		target: "http://localhost:9042",
+		changeOrigin: true,
+		cookieDomainRewrite: "localhost:4321",
+	},
+};
+
+function setPrerender(): AstroIntegration {
+	let isDev = false;
+	return {
+		name: "set-prerender",
+		hooks: {
+			"astro:config:setup": ({ command }) => {
+				isDev = command === "dev";
+			},
+			"astro:route:setup": ({ route }) => {
+				if (
+					isDev &&
+					(route.component.endsWith("/pages/p/[...project].astro") ||
+						route.component.endsWith("/pages/settings/projects/[projectId].astro") ||
+						route.component.endsWith("/pages/settings/entities/[entityId].astro") ||
+						route.component.endsWith("/pages/settings/api-keys/[keyId].astro") ||
+						route.component.endsWith("/pages/settings/teams/[teamId].astro") ||
+						route.component.endsWith("/pages/settings/users/[username].astro"))
+				) {
+					route.prerender = false;
+				}
+			},
+		},
+	};
+}
+
+// https://astro.build/config
+export default defineConfig({
+	build: { assets: "_assets" },
+	fonts: [
+		{
+			provider: fontProviders.fontsource(),
+			name: "Google Sans",
+			cssVariable: "--font-google-sans",
+			display: "block",
+			weights: ["400 500 700"],
+			styles: ["normal"],
+			subsets: ["latin", "latin-ext"],
+		},
+	],
+	vite: {
+		experimental: {
+			renderBuiltUrl() {
+				return { relative: true };
+			},
+		},
+		server: { proxy },
+		preview: { proxy },
+		plugins: [
+			license({
+				thirdParty: {
+					allow: "(MIT OR Apache-2.0 OR ISC OR BSD-3-Clause OR 0BSD OR CC0-1.0 OR Unlicense)",
+					output: {
+						file: path.join(dirname, "../../", "data", "licenses-npm.json"),
+						template: (dependencies) => JSON.stringify(dependencies),
+					},
+				},
+			}),
+		],
+	},
+	integrations: [react({ compiler: true }), setPrerender()],
+	redirects: {
+		"/settings": "/settings/projects",
+	},
+});

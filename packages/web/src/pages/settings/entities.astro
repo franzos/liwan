@@ -1,0 +1,15 @@
+---
+import { CreateEntity, EntitiesTable } from "@/components/settings/entities";
+import Settings from "@/layouts/settings.astro";
+---
+
+<Settings title="Entities">
+  <nav class="list-header">
+    <h1>Entities</h1>
+    <CreateEntity client:only="react" />
+  </nav>
+  <p class="description">
+    Entities identify each website or application sending analytics events.
+  </p>
+  <EntitiesTable client:load />
+</Settings>

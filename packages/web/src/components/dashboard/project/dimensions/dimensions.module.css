@@ -1,0 +1,335 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  padding: 1rem;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+
+  .tabsList {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+
+    .dimensionSelect {
+      all: unset;
+      color: var(--text-title);
+      user-select: none;
+      cursor: pointer;
+      margin-right: auto;
+      padding-right: 1.4rem;
+      background: var(--icon-chevron-down) no-repeat right center / 1rem;
+      outline: none;
+      box-shadow: none;
+      font-weight: 600;
+    }
+  }
+
+  .tabsList button {
+    all: unset;
+    cursor: pointer;
+    user-select: none;
+    opacity: 0.9;
+    font-weight: 500;
+  }
+
+  .tabsList button[aria-selected="true"] {
+    opacity: 1;
+    color: var(--text-title);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-thickness: 0.15rem;
+  }
+
+  .tabsList > button:last-of-type {
+    margin-right: auto;
+  }
+
+  .tabsContent {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+}
+
+.percentage {
+  --bar-radius: 9px;
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  padding-left: 0.4rem;
+  padding-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 0;
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    width: min(100%, calc(var(--percentage) + var(--bar-radius) + var(--bar-radius)));
+    height: 100%;
+    background: light-dark(rgb(11 20 56 / 9%), rgb(165 209 255 / 9%));
+    z-index: -1;
+    transition:
+      width 0.3s ease-in-out,
+      background-color 0.1s ease-in-out;
+    border-radius: var(--bar-radius);
+  }
+
+  &[data-empty="true"]::after {
+    width: 0;
+  }
+
+  &:hover::after {
+    background: light-dark(rgb(11 20 56 / 15%), rgb(165 209 255 / 18%));
+  }
+
+  &.selected::after {
+    background: light-dark(rgb(11 20 56 / 22%), rgb(165 209 255 / 30%));
+  }
+}
+
+.dimensionHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--text);
+  margin-bottom: 1rem;
+
+  > :first-child {
+    margin-right: auto;
+    font-weight: 600;
+    color: var(--text-title);
+  }
+}
+
+.dimensionTable {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* whole pixels keep the gaps between bars identical */
+  --row-height: round(2.1rem, 1px);
+  --row-gap: round(0.2rem, 1px);
+  min-height: calc(var(--count) * (var(--row-height) + var(--row-gap)));
+  position: relative;
+
+  .loadingOverlay {
+    position: absolute;
+    /* bars sit half their bottom padding above the rows, so cover that too */
+    inset: -0.25rem 0 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    opacity: 0;
+    pointer-events: none;
+    animation: showLoadingOverlay 0.2s ease forwards 0.3s;
+
+    &[data-no-delay="true"] {
+      animation-delay: 0s;
+    }
+  }
+}
+
+@keyframes showLoadingOverlay {
+  to {
+    opacity: 0.7;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loadingOverlay {
+    animation-duration: 0s;
+  }
+}
+
+.showMore {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-strong);
+  margin-top: auto;
+  padding-top: 0.4rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.3rem;
+  transition: opacity 0.15s ease-in-out;
+  opacity: 0.6;
+  user-select: none;
+
+  &:hover {
+    opacity: 1;
+  }
+}
+
+.showMoreHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.metricColumn {
+  flex: none;
+  width: 6rem;
+  text-align: right;
+
+  & + & {
+    width: 4rem;
+  }
+}
+
+.dimensionRow {
+  height: var(--row-height);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: var(--row-gap);
+  transition: opacity 0.1s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dimensionRow {
+    transition-duration: 0s;
+  }
+}
+
+.external {
+  display: flex;
+  align-items: center;
+}
+
+.openButton {
+  all: unset;
+  display: flex;
+  flex: none;
+  align-items: center;
+  /* large click target, with the icon kept close to the label */
+  height: 1.9rem;
+  padding: 0 0.5rem 0 0.1rem;
+  margin-left: -0.3rem;
+  cursor: pointer;
+  color: var(--text-muted);
+
+  &:hover {
+    color: var(--text-strong);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+
+.hostname {
+  opacity: 0.7;
+  font-size: 0.6rem;
+}
+
+.dimensionItemSelect {
+  all: unset;
+  position: relative;
+  color: var(--text-strong);
+  padding: 0.5rem 0;
+  max-width: calc(100% - 3rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  span {
+    white-space: nowrap;
+  }
+
+  &:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--text-strong);
+    text-decoration-style: dotted;
+    text-decoration-thickness: 0.1rem;
+  }
+
+  cursor: pointer;
+}
+
+.dimensionEmpty {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 1rem;
+  opacity: 0.6;
+}
+
+.detailsModal.detailsModal {
+  width: min(35rem, 100%);
+  max-width: 35rem;
+}
+
+.detailsModal .dimensionTable {
+  min-height: 0;
+}
+.detailsModal .dimensionHeader {
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.detailsModal .dimensionHeader > :first-child {
+  padding-left: 0.5rem;
+}
+.detailsClose {
+  all: unset;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--text-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text-strong);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+}
+.detailsModal .search {
+  margin-bottom: 0.75rem;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+
+  button {
+    all: unset;
+    cursor: pointer;
+    color: var(--text);
+    font-weight: 500;
+    opacity: 0.9;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  svg {
+    flex: none;
+    opacity: 0.6;
+  }
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

@@ -1,0 +1,417 @@
+import styles from "../settings.module.css";
+
+import { Fragment, useEffect, useMemo, useState } from "react";
+
+import { api } from "@/api";
+import { LoadingSpinner } from "@/components/ui/loading";
+import { Snippet } from "@/components/ui/snippet";
+import type { Column } from "@/components/ui/table";
+import { Table } from "@/components/ui/table";
+import { createToast } from "@/components/ui/toast";
+import { appPath } from "@/config";
+import type { EntityCollectionSettings } from "@/constants";
+import { invalidateEntities, useEntities, useMe, useProjects } from "@/hooks/api";
+import { DeleteDialog } from "../dialogs";
+import {
+	AllowedHostnamesEditor,
+	DocsLink,
+	FiltersEditor,
+	GeoSelect,
+	RetentionSelect,
+	VisitorModeSelect,
+} from "../filters";
+import {
+	getSettingsPathId,
+	SettingsField,
+	SettingsFieldset,
+	SettingsForm,
+	SettingsHeader,
+	SettingsLink,
+	SettingsPanel,
+	SettingsTabs,
+} from "../form";
+import type { Tag } from "../tags";
+import { Tags } from "../tags";
+
+export { CreateEntity } from "./dialogs";
+
+type EntityTab = "general" | "collection" | "filters";
+type EntitySettingsSection = "collection" | "filters";
+
+const entityTabs = [
+	{ value: "general", label: "General" },
+	{ value: "collection", label: "Collection" },
+	{ value: "filters", label: "Filters" },
+] as const satisfies readonly { value: EntityTab; label: string }[];
+
+const EntityId = ({ id }: { id: string }) => (
+	<button
+		type="button"
+		className={styles.entityId}
+		onClick={async () => {
+			try {
+				if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+				await navigator.clipboard.writeText(id);
+				createToast("Entity ID copied to clipboard", "info");
+			} catch {
+				const input = document.createElement("textarea");
+				input.value = id;
+				input.style.position = "fixed";
+				input.style.opacity = "0";
+				document.body.append(input);
+				input.select();
+				let copied = false;
+				try {
+					copied = document.execCommand("copy");
+				} catch {
+					// Clipboard access may be blocked by the browser.
+				} finally {
+					input.remove();
+				}
+				createToast(
+					copied ? "Entity ID copied to clipboard" : "Failed to copy entity ID to clipboard",
+					copied ? "info" : "error",
+				);
+			}
+		}}
+	>
+		{id}
+	</button>
+);
+
+export const EntitiesTable = () => {
+	const { entities, isLoading, authError } = useEntities();
+	const { role } = useMe();
+
+	if (authError) {
+		return "You don't have permission to view this page.";
+	}
+
+	const columns: Column<(typeof entities)[number]>[] = [
+		{
+			id: "displayName",
+			header: "Name",
+			render: (row) =>
+				role === "admin" ? <a href={appPath(`/settings/entities/${row.id}`)}>{row.displayName}</a> : row.displayName,
+			nowrap: true,
+		},
+		{
+			id: "id",
+			header: "ID",
+			render: (row) => <EntityId id={row.id} />,
+			nowrap: true,
+		},
+		{
+			id: "projects",
+			header: "Projects",
+			render: (row) => (
+				<>
+					{row.projects.map((project, i) => (
+						<Fragment key={project.id}>
+							{i > 0 && ", "}
+							{role === "admin" ? (
+								<a href={appPath(`/settings/projects/${project.id}`)}>{project.displayName}</a>
+							) : (
+								project.displayName
+							)}
+						</Fragment>
+					))}
+				</>
+			),
+			full: true,
+		},
+	];
+	if (role === "admin") {
+		columns.push({
+			id: "edit",
+			render: (row) => (
+				<SettingsLink href={appPath(`/settings/entities/${row.id}`)} label={`Open ${row.displayName} settings`} />
+			),
+		});
+	}
+
+	return <Table columns={columns} rows={entities} isLoading={isLoading} />;
+};
+
+export const EntitySettingsPage = ({ entityId }: { entityId: string }) => {
+	const [resolvedEntityId, setResolvedEntityId] = useState<string>();
+
+	useEffect(() => {
+		setResolvedEntityId(getSettingsPathId("/settings/entities/") || entityId);
+	}, [entityId]);
+
+	if (!resolvedEntityId) return <LoadingSpinner />;
+	return <EntitySettingsContent entityId={resolvedEntityId} />;
+};
+
+const EntitySettingsContent = ({ entityId }: { entityId: string }) => {
+	const { entities, isLoading, authError } = useEntities();
+	const { projects } = useProjects();
+	const entity = entities.find((entity) => entity.id === entityId);
+	const [tab, setTab] = useState<EntityTab>("general");
+	const [form, setForm] = useState({ displayName: "", selectedProjects: [] as Tag[] });
+	const { displayName, selectedProjects } = form;
+	const [settings, setSettings] = useState<EntityCollectionSettings>();
+
+	const projectTags = useMemo(
+		() =>
+			projects.map((project) => ({
+				value: project.id,
+				label: project.displayName,
+			})),
+		[projects],
+	);
+
+	useEffect(() => {
+		if (!entity) return;
+		setForm({
+			displayName: entity.displayName,
+			selectedProjects: entity.projects.map((project) => ({
+				value: project.id,
+				label: project.displayName,
+			})),
+		});
+		api["/api/dashboard/entity/{entity_id}/settings"]
+			.get({ params: { entity_id: entity.id } })
+			.json()
+			.then((res) => setSettings(res.settings))
+			.catch(() => createToast("Failed to load entity settings", "error"));
+	}, [entity]);
+
+	const saveEntity = (nextDisplayName: string, nextProjects: Tag[]) => {
+		if (!entity) return;
+		api["/api/dashboard/entity/{entity_id}"]
+			.put({
+				params: { entity_id: entity.id },
+				json: {
+					displayName: nextDisplayName,
+					projects: nextProjects.map((tag) => String(tag.value)),
+				},
+			})
+			.then(() => {
+				invalidateEntities();
+				createToast("Entity updated", "success");
+			})
+			.catch(() => createToast("Failed to update entity", "error"));
+	};
+
+	const saveEntitySettings = (next: EntityCollectionSettings, section: EntitySettingsSection = "collection") => {
+		if (!entity) return;
+		const label = section === "filters" ? "filters" : "collection";
+		setSettings(next);
+		api["/api/dashboard/entity/{entity_id}/settings"]
+			.put({
+				params: { entity_id: entity.id },
+				json: next,
+			})
+			.then(() => createToast(`Entity ${label} updated`, "success"))
+			.catch(() => createToast(`Failed to update entity ${label}`, "error"));
+	};
+
+	const saveCollectionSettings = (
+		patch: Partial<EntityCollectionSettings>,
+		section: EntitySettingsSection = "collection",
+	) => {
+		if (!entity || !settings) return;
+		saveEntitySettings({ ...settings, entityId: entity.id, ...patch }, section);
+	};
+
+	if (authError) return <p>You don't have permission to view this page.</p>;
+	if (isLoading) return <LoadingSpinner />;
+	if (!entity) return <p>Entity not found.</p>;
+
+	return (
+		<SettingsForm>
+			<SettingsHeader
+				title={displayName || entity.displayName}
+				backHref={appPath("/settings/entities")}
+				backLabel="Back to entities"
+			/>
+			<SettingsTabs value={tab} onValueChange={setTab} tabs={entityTabs}>
+				<SettingsPanel value="general" className={styles.detailPanel}>
+					<SettingsField
+						label="Entity name *"
+						description="Identifies this entity in the dashboard."
+						name="displayName"
+					>
+						<input
+							required
+							name="displayName"
+							type="text"
+							value={displayName}
+							onChange={(event) => setForm({ ...form, displayName: event.currentTarget.value })}
+							onBlur={(event) => {
+								if (event.currentTarget.value !== entity.displayName) {
+									saveEntity(event.currentTarget.value, selectedProjects);
+								}
+							}}
+							autoComplete="off"
+						/>
+					</SettingsField>
+					<SettingsFieldset legend="Tracking snippet" description="Add this script to pages tracked by this entity.">
+						<Snippet entityId={entity.id} />
+					</SettingsFieldset>
+					<Tags
+						labelText="Associated projects"
+						labelDescription="Projects that include analytics data from this entity."
+						selected={selectedProjects}
+						suggestions={projectTags}
+						onAdd={(tag) => {
+							const next = [...selectedProjects, tag];
+							setForm({ ...form, selectedProjects: next });
+							saveEntity(displayName, next);
+						}}
+						onDelete={(i) => {
+							const next = selectedProjects.filter((_, index) => index !== i);
+							setForm({ ...form, selectedProjects: next });
+							saveEntity(displayName, next);
+						}}
+					/>
+					<div className={styles.dangerZone}>
+						<div>
+							<strong>Delete entity</strong>
+							<p>The entity will be removed from its projects and will no longer accept events.</p>
+						</div>
+						<DeleteDialog
+							id={entity.id}
+							displayName={entity.displayName}
+							type="entity"
+							onDeleted={() => {
+								window.location.href = appPath("/settings/entities");
+							}}
+							trigger={
+								<button type="button" className="button-danger">
+									Delete entity
+								</button>
+							}
+						/>
+					</div>
+				</SettingsPanel>
+				{settings && (
+					<>
+						<SettingsPanel value="collection">
+							<SettingsField
+								label="Visitor grouping"
+								description={
+									<>
+										Controls how repeat visits are grouped for this entity. <DocsLink hash="visitor-grouping" />
+									</>
+								}
+								name="visitorGroupMode"
+							>
+								<VisitorModeSelect
+									id="entityVisitorGroupMode"
+									value={settings.visitorGroupMode ?? null}
+									onChange={(visitorGroupMode) => saveCollectionSettings({ visitorGroupMode })}
+									allowInherit
+								/>
+							</SettingsField>
+							<SettingsField
+								label="Session metrics"
+								description={
+									<>
+										Required for bounce rate, time on site, entry page, and exit page.{" "}
+										<DocsLink hash="session-metrics" />
+									</>
+								}
+								name="trackSessions"
+							>
+								<select
+									name="trackSessions"
+									value={settings.trackSessions == null ? "inherit" : String(settings.trackSessions)}
+									onChange={(event) => {
+										const trackSessions =
+											event.currentTarget.value === "inherit" ? null : event.currentTarget.value === "true";
+										saveCollectionSettings({ trackSessions });
+									}}
+								>
+									<option value="inherit">Inherit global</option>
+									<option value="true">Track</option>
+									<option value="false">Do not track</option>
+								</select>
+							</SettingsField>
+							<SettingsField
+								label="UTM parameters"
+								description={
+									<>
+										Stores campaign fields like source, medium, campaign, term, and content.{" "}
+										<DocsLink hash="utm-parameters" />
+									</>
+								}
+								name="trackUtmParams"
+							>
+								<select
+									name="trackUtmParams"
+									value={settings.trackUtmParams == null ? "inherit" : String(settings.trackUtmParams)}
+									onChange={(event) => {
+										const trackUtmParams =
+											event.currentTarget.value === "inherit" ? null : event.currentTarget.value === "true";
+										saveCollectionSettings({ trackUtmParams });
+									}}
+								>
+									<option value="inherit">Inherit global</option>
+									<option value="true">Track</option>
+									<option value="false">Do not track</option>
+								</select>
+							</SettingsField>
+							<SettingsField
+								label="Geolocation detail"
+								description={
+									<>
+										Choose how much location data to store for this entity. <DocsLink hash="geolocation" />
+									</>
+								}
+								name="trackGeo"
+							>
+								<GeoSelect
+									id="entityTrackGeo"
+									value={settings.trackGeo ?? null}
+									onChange={(trackGeo) => saveCollectionSettings({ trackGeo })}
+									allowInherit
+								/>
+							</SettingsField>
+							<SettingsField
+								label="History retention"
+								description={
+									<>
+										Automatically delete event data older than the selected period.{" "}
+										<DocsLink hash="retention-and-pruning" />
+									</>
+								}
+								name="historyRetention"
+							>
+								<RetentionSelect
+									value={settings.dataRetention}
+									onChange={(dataRetention) => saveCollectionSettings({ dataRetention })}
+									allowInherit
+								/>
+							</SettingsField>
+						</SettingsPanel>
+						<SettingsPanel value="filters">
+							<SettingsField
+								label="Allowed hostnames"
+								description={
+									<>
+										Only accept events from matching hostnames. Leave empty to allow all hostnames. Type a hostname and
+										press Enter. Supports exact hostnames and <code>*.</code> wildcards in the subdomain position.
+									</>
+								}
+								name="allowedHostnames"
+							>
+								<AllowedHostnamesEditor
+									value={settings.allowedHostnames}
+									onChange={(allowedHostnames) => saveCollectionSettings({ allowedHostnames }, "filters")}
+								/>
+							</SettingsField>
+							<FiltersEditor
+								rules={settings.ingestDropRules}
+								setRules={(ingestDropRules) => saveCollectionSettings({ ingestDropRules }, "filters")}
+								scope="entity"
+							/>
+						</SettingsPanel>
+					</>
+				)}
+			</SettingsTabs>
+		</SettingsForm>
+	);
+};

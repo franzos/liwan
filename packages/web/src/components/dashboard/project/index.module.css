@@ -1,0 +1,141 @@
+.project {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.loading {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+
+.projectReport {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.projectHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+
+  > h1 {
+    font-size: var(--font-size-xl);
+    margin: 0;
+    align-items: first baseline;
+
+    > a {
+      padding-bottom: 0;
+      padding-left: 0.2rem;
+    }
+  }
+
+  @media (max-width: 700px) {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    padding-bottom: 0.5rem;
+    gap: 0.5rem;
+
+    > div {
+      width: 100%;
+      justify-content: end;
+    }
+  }
+}
+
+.projectStats {
+  --metric-button-active-background: light-dark(var(--surface), var(--surface-active));
+  --metric-button-hover-background: light-dark(color-mix(in srgb, var(--surface) 35%, transparent), #252c38);
+  --metric-button-border: transparent;
+}
+
+.tables {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+
+  @media (max-width: 40rem) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.graphCard {
+  height: 20rem;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.geoCard.geoCard {
+  padding: 0;
+  grid-column: span 2;
+  display: flex;
+  flex-direction: row;
+  border-radius: var(--radius);
+  background: var(--surface);
+
+  > div {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .geoMap {
+    display: flex;
+    position: relative;
+    width: calc(50% + 1rem);
+
+    &::after {
+      content: "";
+      position: absolute;
+      --direction: right;
+      background: linear-gradient(to var(--direction), transparent 0%, var(--surface) 100%);
+
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 3rem;
+    }
+  }
+
+  .geoTable {
+    width: calc(50% - 1rem);
+
+    > div {
+      padding: 1rem;
+      padding-left: 0;
+    }
+  }
+
+  @media (max-width: 40rem) {
+    grid-column: span 1;
+    flex-direction: column;
+
+    .geoTable,
+    .geoMap {
+      width: 100%;
+    }
+
+    .geoMap {
+      &::after {
+        top: unset;
+        width: 100%;
+        left: 0;
+        height: 3rem;
+        --direction: bottom;
+      }
+    }
+
+    .geoTable {
+      padding: 1rem;
+      padding-top: 0;
+
+      > div {
+        padding: 0;
+      }
+    }
+  }
+}

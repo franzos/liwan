@@ -1,0 +1,418 @@
+import styles from "./dimensions.module.css";
+
+import { useEffect, useState } from "react";
+import { Tabs } from "@base-ui/react/tabs";
+import { ChevronRightIcon, LinkIcon, MonitorIcon, PinIcon, SquareArrowOutUpRightIcon, TagIcon } from "lucide-react";
+
+import { LoadingSpinner } from "@/components/ui/loading";
+import type { Dimension, DimensionTableRow } from "@/constants";
+import { dimensionNames, eventMetricName } from "@/constants";
+import { useDimension } from "@/hooks/api";
+import { cls, countryCodeToFlag, formatHost, formatMetricVal, formatPath, getHref, tryParseUrl } from "@/utils";
+import { getDimensionFilter, type ProjectQuery } from "..";
+import { BrowserIcon, MobileDeviceIcon, OrientationIcon, OSIcon, ReferrerIcon } from "../icons";
+import { DetailsModal } from "./modal";
+
+export type DimensionProps = {
+	dimension: Dimension;
+	propertyKey?: string;
+	query: ProjectQuery;
+	onSelect: (value: DimensionTableRow) => void;
+	/** Shows a chevron next to each row to open it, e.g. to list a property key's values */
+	onOpen?: (value: DimensionTableRow) => void;
+	onBack?: () => void;
+};
+
+export const DimensionCard = (props: DimensionProps) => {
+	return (
+		<article className={styles.card}>
+			<div className={styles.dimensionHeader}>
+				<div>{dimensionNames[props.dimension]}</div>
+				<div>{eventMetricName(props.query.metric, props.query.eventName)}</div>
+			</div>
+			<DimensionTable {...props} />
+		</article>
+	);
+};
+
+export const DimensionTabsCard = ({
+	dimensions,
+	query,
+	onSelect,
+}: {
+	dimensions: Dimension[];
+	query: ProjectQuery;
+	onSelect: (value: DimensionTableRow, dimension: Dimension) => void;
+}) => {
+	return (
+		<article className={styles.card}>
+			<DimensionTabs dimensions={dimensions} query={query} onSelect={onSelect} />
+		</article>
+	);
+};
+
+export const PageDimensionTabsCard = ({
+	dimensions = ["url", "url_entry", "url_exit", "fqdn"],
+	query,
+	onSelect,
+}: {
+	dimensions?: Dimension[];
+	query: ProjectQuery;
+	onSelect: (value: DimensionTableRow, dimension: Dimension) => void;
+}) => {
+	const showSessionPageDimensions = query.metric === "views" || query.metric === "unique_visitors";
+
+	if (!showSessionPageDimensions || dimensions.length === 1) {
+		const dimension = dimensions.includes("url") ? "url" : dimensions[0];
+		return <DimensionCard dimension={dimension} query={query} onSelect={(value) => onSelect(value, dimension)} />;
+	}
+
+	return <DimensionDropdownCard dimensions={dimensions} query={query} onSelect={onSelect} />;
+};
+
+export const DimensionDropdownCard = ({
+	dimensions,
+	query,
+	onSelect,
+}: {
+	dimensions: Dimension[];
+	query: ProjectQuery;
+	onSelect: (value: DimensionTableRow, dimension: Dimension) => void;
+}) => {
+	const [selectedDimension, setSelectedDimension] = useState(dimensions[0]);
+
+	useEffect(() => {
+		if (!dimensions.includes(selectedDimension)) setSelectedDimension(dimensions[0]);
+	}, [dimensions, selectedDimension]);
+
+	return (
+		<article className={styles.card}>
+			<Tabs.Root
+				className={styles.tabs}
+				value={selectedDimension}
+				onValueChange={(value) => setSelectedDimension(value as Dimension)}
+			>
+				<Tabs.List className={styles.tabsList}>
+					<select
+						className={styles.dimensionSelect}
+						value={selectedDimension}
+						onChange={(e) => setSelectedDimension(e.target.value as Dimension)}
+					>
+						{dimensions.map((dimension) => (
+							<option key={dimension} value={dimension}>
+								{dimensionNames[dimension]}
+							</option>
+						))}
+					</select>
+					<div>{eventMetricName(query.metric, query.eventName)}</div>
+				</Tabs.List>
+				{dimensions.map((dimension) => (
+					<Tabs.Panel key={dimension} value={dimension} className={styles.tabsContent}>
+						<DimensionTable dimension={dimension} query={query} onSelect={(value) => onSelect(value, dimension)} />
+					</Tabs.Panel>
+				))}
+			</Tabs.Root>
+		</article>
+	);
+};
+
+export const DimensionTabs = ({
+	dimensions,
+	query,
+	onSelect,
+}: {
+	dimensions: Dimension[];
+	query: ProjectQuery;
+	onSelect: (value: DimensionTableRow, dimension: Dimension) => void;
+}) => {
+	return (
+		<Tabs.Root key={dimensions.join(":")} className={styles.tabs} defaultValue={dimensions[0]}>
+			<Tabs.List className={styles.tabsList}>
+				{Object.entries(dimensions).map(([key, value]) => (
+					<Tabs.Tab key={key} value={value}>
+						{dimensionNames[value]}
+					</Tabs.Tab>
+				))}
+				<div>{eventMetricName(query.metric, query.eventName)}</div>
+			</Tabs.List>
+			{dimensions.map((dimension) => (
+				<Tabs.Panel key={dimension} value={dimension} className={styles.tabsContent}>
+					<DimensionTable dimension={dimension} query={query} onSelect={(value) => onSelect(value, dimension)} />
+				</Tabs.Panel>
+			))}
+		</Tabs.Root>
+	);
+};
+
+export const DimensionTable = (props: DimensionProps) => {
+	const { data, biggest, isLoading } = useDimension({
+		dimension: props.dimension,
+		propertyKey: props.propertyKey,
+		...props.query,
+	});
+	const dataTruncated = data?.slice(0, 6);
+
+	return (
+		<>
+			<div className={styles.dimensionTable} style={{ "--count": 6 } as React.CSSProperties}>
+				{isLoading && (
+					<div className={styles.loadingOverlay} data-no-delay={!data}>
+						<LoadingSpinner immediate />
+					</div>
+				)}
+				{dataTruncated?.map((d) => (
+					<DimensionRow key={d.dimensionValue} {...props} row={d} biggest={biggest} />
+				))}
+				{!isLoading && dataTruncated?.length === 0 && (
+					<div className={styles.dimensionEmpty}>
+						<div>No data available</div>
+					</div>
+				)}
+			</div>
+			<DetailsModal {...props} />
+		</>
+	);
+};
+
+export const Breadcrumb = ({ parent, title, onBack }: { parent: string; title: string; onBack: () => void }) => (
+	<div className={styles.breadcrumb}>
+		<button type="button" onClick={onBack}>
+			{parent}
+		</button>
+		<ChevronRightIcon size={16} aria-hidden="true" />
+		<span title={title}>{title}</span>
+	</div>
+);
+
+export const DimensionValueButton = ({ children, onSelect }: { children: string; onSelect?: () => void }) => (
+	<button type="button" className={styles.dimensionItemSelect} onClick={onSelect}>
+		<span title={children}>{children}</span>
+	</button>
+);
+
+const ExternalLink = ({ href, label }: { href: string; label: string }) => (
+	<a href={href} target="_blank" rel="noreferrer" className={styles.external} aria-label={`Open ${label} in a new tab`}>
+		<SquareArrowOutUpRightIcon size={16} />
+	</a>
+);
+
+const renderUtmDimensionLabel = (value: DimensionTableRow, onSelect: () => void) => (
+	<>
+		<PinIcon size={24} />
+		<DimensionValueButton onSelect={onSelect}>{value.dimensionValue || "Unknown/None"}</DimensionValueButton>
+	</>
+);
+
+const renderUrlDimensionLabel = (value: DimensionTableRow, onSelect: () => void) => {
+	const url = tryParseUrl(value.dimensionValue);
+
+	return (
+		<>
+			<LinkIcon size={16} />
+			<DimensionValueButton onSelect={onSelect}>{formatPath(url)}</DimensionValueButton>
+			<ExternalLink href={getHref(url)} label={value.dimensionValue} />
+			{typeof url !== "string" && <span className={styles.hostname}>{formatHost(url)}</span>}
+		</>
+	);
+};
+
+const screenWidthRanges: Record<string, [number, number]> = {
+	xs: [0, 479],
+	sm: [480, 767],
+	md: [768, 1023],
+	lg: [1024, 1279],
+	xl: [1280, 1535],
+	"2xl": [1536, Number.POSITIVE_INFINITY],
+};
+
+const formatScreenWidth = (value: string) => {
+	const key = value.toLowerCase();
+	const range = screenWidthRanges[key];
+
+	if (!range) {
+		return value;
+	}
+
+	const [min, max] = range;
+	const upper = Number.isFinite(max) ? `${max}px` : "∞";
+	return `${key.toUpperCase()} (${min}px to ${upper})`;
+};
+
+const dimensionLabels: Record<Dimension, (value: DimensionTableRow, onSelect: () => void) => React.ReactNode> = {
+	utm_campaign: renderUtmDimensionLabel,
+	utm_content: renderUtmDimensionLabel,
+	utm_medium: renderUtmDimensionLabel,
+	utm_source: renderUtmDimensionLabel,
+	utm_term: renderUtmDimensionLabel,
+	platform: (value, onSelect) => (
+		<>
+			<OSIcon os={value.dimensionValue} size={24} />
+			<DimensionValueButton onSelect={onSelect}>{value.dimensionValue}</DimensionValueButton>
+		</>
+	),
+	browser: (value, onSelect) => (
+		<>
+			<BrowserIcon browser={value.dimensionValue} size={24} />
+			<DimensionValueButton onSelect={onSelect}>{value.dimensionValue}</DimensionValueButton>
+		</>
+	),
+	url: renderUrlDimensionLabel,
+	url_entry: renderUrlDimensionLabel,
+	url_exit: renderUrlDimensionLabel,
+	fqdn: (value, onSelect) => {
+		const url = tryParseUrl(value.dimensionValue);
+		return (
+			<>
+				<LinkIcon size={16} />
+				<DimensionValueButton onSelect={onSelect}>{formatHost(url)}</DimensionValueButton>
+				<ExternalLink href={getHref(url)} label={value.dimensionValue} />
+			</>
+		);
+	},
+	mobile: (value, onSelect) => (
+		<>
+			<MobileDeviceIcon isMobile={value.dimensionValue === "true"} size={24} />
+			<DimensionValueButton onSelect={onSelect}>
+				{value.dimensionValue === "true" ? "Mobile" : "Desktop"}
+			</DimensionValueButton>
+		</>
+	),
+	country: (value, onSelect) => (
+		<>
+			<span>{countryCodeToFlag(value.dimensionValue)}</span>
+			<DimensionValueButton onSelect={onSelect}>
+				{value.displayName || value.dimensionValue || "Unknown"}
+			</DimensionValueButton>
+		</>
+	),
+	city: (value, onSelect) => (
+		<>
+			<span>{countryCodeToFlag(value.icon || "XX")}</span>
+			<DimensionValueButton onSelect={onSelect}>{value.displayName || "Unknown"}</DimensionValueButton>
+		</>
+	),
+	referrer: (value, onSelect) => {
+		let name = value.displayName || value.dimensionValue || "Unknown";
+
+		if (!value.dimensionValue.endsWith(".com") && name === "Google") {
+			const end = value.dimensionValue.split(".").at(-1);
+			name = `Google (${end})`;
+		}
+
+		return (
+			<>
+				<ReferrerIcon referrer={value.dimensionValue} icon={value.icon} size={24} />
+				<DimensionValueButton onSelect={onSelect}>{name}</DimensionValueButton>
+				{value.dimensionValue && isValidFqdn(value.dimensionValue) && (
+					<ExternalLink href={`https://${value.dimensionValue}`} label={value.dimensionValue} />
+				)}
+			</>
+		);
+	},
+	path: (value, onSelect) => (
+		<>
+			<LinkIcon size={16} />
+			<DimensionValueButton onSelect={onSelect}>{value.dimensionValue}</DimensionValueButton>
+		</>
+	),
+	property: (value, onSelect) => (
+		<>
+			<TagIcon size={16} />
+			<DimensionValueButton onSelect={onSelect}>{value.dimensionValue}</DimensionValueButton>
+		</>
+	),
+	screen_width: (value, onSelect) => (
+		<>
+			<MonitorIcon size={16} />
+			<DimensionValueButton onSelect={onSelect}>
+				{value.dimensionValue ? formatScreenWidth(value.dimensionValue) : "Unknown"}
+			</DimensionValueButton>
+		</>
+	),
+	orientation: (value, onSelect) => (
+		<>
+			<OrientationIcon orientation={value.dimensionValue} size={24} />
+			<DimensionValueButton onSelect={onSelect}>
+				{value.displayName ? value.displayName : "Unknown"}
+			</DimensionValueButton>
+		</>
+	),
+};
+
+const isValidFqdn = (fqdn: string) => {
+	if (!fqdn.includes(".")) return false;
+	try {
+		new URL(`https://${fqdn}`);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+export const DimensionRow = ({
+	row,
+	biggest,
+	dimension,
+	propertyKey,
+	query,
+	onSelect,
+	onOpen,
+}: DimensionProps & { row: DimensionTableRow; biggest: number }) => (
+	<div className={styles.dimensionRow}>
+		<DimensionValueBar
+			value={row.value}
+			biggest={biggest}
+			selected={isSelected(query, dimension, row.dimensionValue, propertyKey)}
+		>
+			{dimensionLabels[dimension](row, () => onSelect(row))}
+			{onOpen && (
+				<button
+					type="button"
+					className={styles.openButton}
+					aria-label={`Open ${row.dimensionValue}`}
+					title={`Open ${row.dimensionValue}`}
+					onClick={() => onOpen(row)}
+				>
+					<ChevronRightIcon size={20} />
+				</button>
+			)}
+		</DimensionValueBar>
+		<div>{formatMetricVal(row.value, query.metric)}</div>
+	</div>
+);
+
+export const DimensionValueBar = ({
+	value,
+	biggest,
+	children,
+	selected = false,
+}: {
+	value: number;
+	biggest: number;
+	children?: React.ReactNode;
+	selected?: boolean;
+}) => (
+	<div
+		className={cls(styles.percentage, selected && styles.selected)}
+		data-empty={value <= 0}
+		style={{ "--percentage": `${biggest > 0 ? (value / biggest) * 100 : 0}%` } as React.CSSProperties}
+	>
+		{children}
+	</div>
+);
+
+export const isSelected = (query: ProjectQuery, dimension: Dimension, value: string, propertyKey?: string) => {
+	// in the property key list, a key is active while any filter uses it
+	if (dimension === "property" && propertyKey === undefined) {
+		return query.filters.some((filter) => filter.dimension === "property" && filter.key === value);
+	}
+	const selected = getDimensionFilter(dimension, value, propertyKey);
+	return query.filters.some(
+		(filter) =>
+			filter.dimension === selected.dimension &&
+			filter.key === selected.key &&
+			filter.filterType === selected.filterType &&
+			filter.value === selected.value &&
+			!filter.inversed,
+	);
+};

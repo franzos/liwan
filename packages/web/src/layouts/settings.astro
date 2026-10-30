@@ -1,0 +1,256 @@
+---
+import {
+	CodeIcon,
+	DatabaseIcon,
+	KeyRoundIcon,
+	ShieldCheckIcon,
+	TablePropertiesIcon,
+	UserIcon,
+	UsersIcon,
+} from "lucide-react";
+
+import Layout from "./layout.astro";
+
+type Props = {
+	title: string;
+};
+
+const path = Astro.url.pathname;
+const { title } = Astro.props;
+
+const groups = [
+	{
+		label: "General",
+		pages: [
+			{ href: "/settings/me", label: "My Account", icon: UserIcon },
+			{ href: "/settings/projects", label: "Projects", icon: TablePropertiesIcon },
+			{ href: "/settings/entities", label: "Entities", icon: CodeIcon },
+		],
+	},
+	{
+		label: "Admin",
+		admin: true,
+		pages: [
+			{ href: "/settings/collection", label: "Collection", icon: DatabaseIcon },
+			{ href: "/settings/users", label: "Users", icon: UsersIcon },
+			{ href: "/settings/teams", label: "Teams", icon: UsersIcon },
+			{ href: "/settings/authentication", label: "Authentication", icon: ShieldCheckIcon },
+			{ href: "/settings/api-keys", label: "API Keys", icon: KeyRoundIcon },
+		],
+	},
+];
+---
+
+<Layout {title}>
+  <div class="settings">
+    <aside class="mobile">
+      <select name="select" aria-label="Select a page" id="select-settings-page">
+        {groups.map((group) => (
+          <optgroup label={group.label} data-admin-nav={group.admin || undefined}>
+            {group.pages.map((page) => (
+              <option selected={path.startsWith(page.href) || undefined} value={page.href}>{page.label}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </aside>
+    <aside class="desktop">
+      {groups.map((group) => (
+        <h3 data-admin-nav={group.admin || undefined}>{group.label}</h3>
+        <ul class="sidebar" data-admin-nav={group.admin || undefined}>
+          {group.pages.map(({ href, label, icon: Icon }) => (
+            <li>
+              <a aria-current={path.startsWith(href) ? "page" : undefined} href={href}>
+                <Icon size="20" />
+                {label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      ))}
+    </aside>
+    <article class="content">
+      <slot />
+    </article>
+  </div>
+</Layout>
+
+<script>
+  import { navigate } from "astro:transitions/client";
+  import { api } from "@/api/client";
+  import { queryClient } from "@/api/query";
+  import { appPath } from "@/config";
+
+  function handleSelectChange(event: Event) {
+    navigate(appPath((event.currentTarget as HTMLSelectElement).value));
+  }
+
+  document.addEventListener("astro:before-swap", (event) => {
+    const role = document.querySelector<HTMLElement>(".settings")?.dataset.role;
+    const nextSettings = event.newDocument.querySelector<HTMLElement>(".settings");
+    if (!role || !nextSettings) return;
+
+    const adminPage = !!nextSettings.querySelector("[data-admin-nav] a[aria-current]") ||
+      ["/settings/projects/", "/settings/entities/"].some((path) => event.to.pathname.startsWith(appPath(path)));
+    if (role === "admin" || !adminPage) nextSettings.dataset.role = role;
+  });
+
+  document.addEventListener("astro:page-load", async () => {
+    const settings = document.querySelector<HTMLElement>(".settings");
+    if (!settings) return;
+    document.getElementById("select-settings-page")?.addEventListener("change", handleSelectChange);
+
+    try {
+      const { role } = await queryClient.fetchQuery({
+        queryKey: ["me"],
+        queryFn: () => api["/api/dashboard/auth/me"].get().json(),
+        staleTime: 5 * 60_000,
+      });
+      if (role !== "admin") {
+        if (settings.querySelector("[data-admin-nav] a[aria-current]") ||
+            ["/settings/projects/", "/settings/entities/"].some((path) =>
+              window.location.pathname.startsWith(`${appPath(path)}`))) {
+          window.location.replace(appPath("/settings/me"));
+          return;
+        }
+        settings.querySelector("optgroup[data-admin-nav]")?.remove();
+      }
+      settings.dataset.role = role;
+    } catch (error) {
+      if ((error as { status?: number }).status === 401) {
+        const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.location.replace(appPath(`/login?${new URLSearchParams({ returnTo })}`));
+        return;
+      }
+      settings.querySelector<HTMLElement>(".content")!.textContent = "Failed to load account. Refresh to try again.";
+      settings.dataset.role = "user";
+    }
+  });
+</script>
+
+<style>
+  .settings:not([data-role]) {
+    visibility: hidden;
+  }
+
+  .settings:not([data-role="admin"]) [data-admin-nav] {
+    display: none;
+  }
+
+  .settings :global(nav) {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    min-height: 2.15rem;
+  }
+
+  .settings :global(nav.list-header button),
+  .settings :global(nav > button[type="submit"]) {
+    translate: 7px -2px;
+  }
+
+  .settings :global(h1) {
+    font-size: var(--font-size-xl);
+    margin: 0;
+  }
+
+  .settings :global(.description) {
+    max-width: 46rem;
+    margin-bottom: 1rem;
+    color: var(--text-muted);
+  }
+
+  .settings {
+    display: flex;
+    height: 100%;
+    margin-top: 1rem;
+  }
+
+  .settings :global(.content) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 0.8rem 1rem;
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  aside {
+    display: flex;
+    flex-direction: column;
+    width: 11rem;
+    gap: 0.4rem;
+    margin-right: 1.5rem;
+
+    h3 {
+      margin: 0;
+      margin-left: 0.3rem;
+      margin-top: 0.2rem;
+      font-size: var(--font-size-md);
+    }
+  }
+
+  .sidebar {
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-bottom: 1rem;
+
+    li {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    a {
+      line-height: 1.25;
+      font-size: var(--font-size-md);
+      text-decoration: none;
+      transition: all 0.2s;
+      border-radius: var(--radius);
+      padding: 0.3rem 0.4rem;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--accent);
+
+      svg {
+        width: 1.125rem;
+        height: 1.125rem;
+        flex: none;
+      }
+    }
+
+    a[aria-current="page"] {
+      color: var(--text-strong);
+      background: var(--surface);
+    }
+
+    a:hover {
+      color: var(--text-strong);
+      background: var(--surface);
+    }
+  }
+
+  .mobile {
+    display: none;
+    width: 100%;
+    margin-bottom: 1rem;
+  }
+  @media (max-width: 768px) {
+    .mobile {
+      display: block;
+    }
+    .desktop {
+      display: none;
+    }
+    .settings {
+      flex-direction: column;
+    }
+  }
+</style>

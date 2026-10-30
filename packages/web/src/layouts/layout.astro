@@ -1,0 +1,85 @@
+---
+import { LoginButton } from "@/components/ui/user-info";
+import Base from "./base.astro";
+
+type Props = {
+	title: string;
+};
+
+const { title } = Astro.props;
+---
+
+<Base {title}>
+  <header class="page-shell">
+    <nav>
+      <ul>
+        <li>
+          <a href="/" class="logo">
+            <img src="/favicon.svg" alt="liwan logo" width="24" height="24" />
+            <strong>liwan</strong>
+          </a>
+        </li>
+      </ul>
+      <ul>
+        <li class="login"><LoginButton client:only="react" /></li>
+      </ul>
+    </nav>
+  </header>
+  <main class="page-shell">
+    <slot />
+  </main>
+</Base>
+
+<style>
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .login {
+    position: relative;
+  }
+
+  nav {
+    min-height: 2.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  nav ul {
+    display: flex;
+    align-items: center;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .logo strong {
+    font-weight: 500;
+  }
+
+  main,
+  header {
+    max-width: 64rem;
+    padding: 1rem var(--page-gutter);
+  }
+
+  header {
+    padding-top: 0.5rem;
+    padding-bottom: 0;
+  }
+
+  @media (min-width: 70rem) {
+    header { padding-top: 1rem; }
+  }
+</style>

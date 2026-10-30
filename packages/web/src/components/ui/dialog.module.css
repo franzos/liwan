@@ -1,0 +1,104 @@
+@keyframes overlayShow {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes contentShow {
+  from {
+    opacity: 0;
+    transform: translateY(2%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.overlay {
+  background-color: rgb(3 6 12 / 62%);
+  position: fixed;
+  inset: 0;
+  backdrop-filter: blur(3px);
+  animation: overlayShow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 100;
+}
+
+.title {
+  margin: 0 0 0.45rem;
+  white-space: preserve-breaks;
+  font-size: var(--font-size-lg);
+  line-height: 1.15;
+}
+
+.description {
+  max-width: 38rem;
+  margin: 0 0 1.15rem;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+  line-height: 1.35;
+}
+
+.viewport {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  pointer-events: none;
+}
+
+.content {
+  position: relative;
+  box-sizing: border-box;
+  width: min(28rem, 100%);
+  max-height: min(85vh, calc(100dvh - 2rem));
+  margin: 0;
+  padding: 1.25rem;
+  border: 1px solid light-dark(var(--field-border-hover), transparent);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: 0.8rem;
+  box-shadow: 0 1.25rem 4rem light-dark(transparent, rgb(0 0 0 / 35%));
+  animation: contentShow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+}
+
+.autoOverflow {
+  overflow-y: auto;
+}
+
+.content form {
+  margin: 0;
+}
+
+.content form > label {
+  margin-bottom: 0.85rem;
+  font-size: var(--font-size-md);
+  font-weight: 500;
+}
+
+.content form label > input,
+.content form label > select,
+.content form label > textarea {
+  margin-top: 0.35rem;
+  margin-bottom: 0;
+}
+
+.content form > :global(.action-row) {
+  gap: 0.65rem;
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 480px) {
+  .content {
+    padding: 1rem;
+  }
+  .viewport {
+    padding: 0.5rem;
+  }
+}

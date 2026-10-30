@@ -1,0 +1,16 @@
+{
+	"name": "liwan-screenshots",
+	"private": true,
+	"module": "index.ts",
+	"type": "module",
+	"scripts": {
+		"preview": "bun run preview.ts",
+		"screenshots": "bun run index.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"puppeteer-core": "^25.16.0",
+		"typescript": "^7.0.2"
+	}
+}

@@ -1,0 +1,100 @@
+---
+import { Font } from "astro:assets";
+import "../global.css";
+
+import { ClientRouter } from "astro:transitions";
+
+import ThemeSwitcher from "@/components/ui/theme-switcher.astro";
+import { ToastHost } from "@/components/ui/toast";
+
+type Props = { title: string; hideFooter?: boolean };
+---
+
+<html lang="en" transition:animate="none">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="robots" content="noindex" />
+    <meta name="description" content="liwan Web Analytics Dashboard" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <Font cssVariable="--font-google-sans" preload={[{ subset: "latin" }]} />
+    <script is:inline>
+      try {
+        const theme = localStorage.getItem("theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
+    <ClientRouter />
+    <script id="liwan-config" type="application/json" is:inline>__LIWAN_CONFIG__</script>
+    <title>{Astro.props.title} | liwan</title>
+    <!-- LIWAN_HEAD_HTML -->
+  </head>
+  <body>
+    <slot />
+    <ToastHost client:only="react" />
+    {
+      !Astro.props.hideFooter && (
+        <footer class="page-shell footer">
+          <div class="footer-start">
+            <span class="footer-theme"><ThemeSwitcher /></span>
+            <small>
+              <span>
+                Powered by <a href="https://liwan.dev" target="_blank">liwan.dev</a>
+              </span>
+            </small>
+          </div>
+          <small class="footer-links">
+            <!-- LIWAN_FOOTER_LINKS -->
+            <a href="/attributions">Licenses</a>
+          </small>
+        </footer>
+      )
+    }
+    <style>
+      footer {
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 64rem;
+        padding: 1rem var(--page-gutter);
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+
+        small {
+          display: inline-flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 0.35rem 0.8rem;
+          color: var(--text-muted);
+          font-size: var(--font-size-sm);
+        }
+
+        small a {
+          color: inherit;
+          text-underline-offset: 0.14em;
+        }
+
+        .footer-start {
+          display: flex;
+          align-items: center;
+          gap: 0.65rem;
+        }
+
+        .footer-theme {
+          display: flex;
+          color: var(--text-muted);
+          opacity: 0.8;
+        }
+      }
+
+      @media (max-width: 768px) {
+        footer {
+          padding-top: 0.5rem;
+        }
+      }
+    </style>
+  </body>
+</html>

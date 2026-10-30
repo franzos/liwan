@@ -1,0 +1,16 @@
+---
+import { CreateUser, UsersTable } from "@/components/settings/users";
+import Settings from "@/layouts/settings.astro";
+---
+
+<Settings title="Users">
+  <nav class="list-header">
+    <h1>Users</h1>
+    <CreateUser client:only="react" />
+  </nav>
+  <p class="description">
+    Manage administrator roles. Assign project access in <a href="/settings/teams">Teams</a>. Configure sign-in methods
+    in <a href="/settings/authentication">Authentication settings</a>.
+  </p>
+  <UsersTable client:load />
+</Settings>

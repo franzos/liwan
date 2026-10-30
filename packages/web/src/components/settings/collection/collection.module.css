@@ -1,0 +1,5 @@
+.pruneActions {
+  display: flex;
+  flex: none;
+  gap: 0.6rem;
+}

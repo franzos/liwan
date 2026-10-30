@@ -1,0 +1,16 @@
+---
+import { CreateProject, ProjectsTable } from "@/components/settings/projects";
+import Settings from "@/layouts/settings.astro";
+---
+
+<Settings title="Projects">
+  <nav class="list-header">
+    <h1>Projects</h1>
+    <CreateProject client:only="react" />
+  </nav>
+  <p class="description">
+    Projects group one or more entities for dashboard reporting and access
+    control.
+  </p>
+  <ProjectsTable client:load />
+</Settings>

@@ -1,5 +1,5 @@
 {
-	"$schema": "./web/node_modules/@biomejs/biome/configuration_schema.json",
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"assist": {
 		"enabled": true,
 		"actions": {
@@ -69,21 +69,11 @@
 		}
 	},
 	"files": {
-		"includes": [
-			"web/**/*.{ts,tsx,astro,css}",
-			"!web/dist",
-			"!web/node_modules",
-			"!web/.astro",
-			"!web/src/api/dashboard.ts",
-			"tracker/script.ts"
-		]
+		"includes": ["packages/**/*.{ts,tsx,astro,css}", "!packages/tracker/lib", "!packages/web/src/api/dashboard.ts"]
 	},
 	"overrides": [
 		{
 			"includes": ["**/*.astro"],
-			"assist": {
-				"enabled": false
-			},
 			"linter": {
 				"rules": {
 					"correctness": {

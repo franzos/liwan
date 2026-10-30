@@ -1,6 +1,10 @@
-/target
+/target/
 /target-podman
+/liwan-data/
 liwan.config.toml
-/liwan-data
 profile.json
 .superpowers/
+
+node_modules/
+dist/
+.astro/

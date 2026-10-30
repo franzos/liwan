@@ -1,0 +1,68 @@
+---
+import { MoonIcon, SunIcon } from "lucide-react";
+
+const { class: className, ...rest } = Astro.props;
+---
+
+<button id="theme-switcher" type="button" aria-label="Toggle dark mode" class={className} {...rest}>
+  <SunIcon className="sun" />
+  <MoonIcon className="moon" />
+</button>
+
+<style>
+  button {
+    display: grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+  }
+  button:hover { background: transparent; color: var(--text); }
+  button svg { width: 1.25rem; height: 1.25rem; }
+  .moon { display: none; }
+  :global(:root[data-theme="dark"]) .sun { display: none; }
+  :global(:root[data-theme="dark"]) .moon { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme])) .sun { display: none; }
+    :global(:root:not([data-theme])) .moon { display: block; }
+  }
+</style>
+
+<script>
+  const preference = () => document.documentElement.dataset.theme;
+  const systemTheme = () => matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const nextTheme = () => (preference() ?? systemTheme()) === "dark" ? "light" : "dark";
+  const init = () => {
+    const button = document.getElementById("theme-switcher");
+    if (!button) return;
+    const updateLabel = () => {
+      const next = nextTheme();
+      button.setAttribute("aria-label", `Switch to ${next} mode`);
+    };
+    updateLabel();
+    button.onclick = () => {
+      const next = nextTheme();
+      document.documentElement.dataset.theme = next;
+      localStorage.setItem("theme", next);
+      updateLabel();
+    };
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateLabel, { signal: themeListener.signal });
+  };
+  let themeListener = new AbortController();
+  document.addEventListener("astro:page-load", () => {
+    themeListener.abort();
+    themeListener = new AbortController();
+    init();
+  });
+  document.addEventListener("astro:after-swap", () => {
+    try {
+      const theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      else delete document.documentElement.dataset.theme;
+    } catch {}
+  });
+</script>

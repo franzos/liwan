@@ -1,0 +1,86 @@
+form.password {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  h2 {
+    margin-bottom: 0;
+  }
+
+  label,
+  input {
+    margin-bottom: 0;
+  }
+}
+
+.passwordActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.passwordActions button {
+  width: fit-content;
+}
+
+.header {
+  display: flex;
+  background-color: var(--surface-inset);
+  border: 1px solid var(--border-surface);
+  border-radius: var(--radius);
+  padding: 1rem;
+  align-items: center;
+  gap: 0.5rem;
+
+  h2 {
+    font-size: var(--font-size-lg);
+    margin: 0;
+  }
+
+  p {
+    margin: 0;
+    font-size: var(--font-size-md);
+    color: var(--text-muted);
+
+    &[data-loading="true"] {
+      visibility: hidden;
+    }
+  }
+}
+
+.container {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  animation: fadeIn 0.2s ease;
+
+  article {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 0.5rem;
+    padding: 0;
+    background: transparent;
+  }
+
+  > article + article {
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+
+  h2 {
+    font-size: var(--font-size-lg);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .container {
+    animation: none;
+  }
+}

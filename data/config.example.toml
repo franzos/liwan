@@ -1,4 +1,4 @@
-base_url = "http://localhost:9042"  # The base URL of the Liwan instance
+base_url = "http://localhost:9042"  # Public URL, optionally with a path, e.g. https://example.com/liwan
 listen = 9042  # The port to listen on (http)
 
 ## Disable favicon fetching from the DuckDuckGo API.
@@ -8,6 +8,16 @@ listen = 9042  # The port to listen on (http)
 ## defaults to $HOME/.local/share/liwan/data on linux/macos
 ## defaults to ./liwan-data on other platforms
 # data_dir="./liwan-data"
+
+## Dashboard session lifetime (default: 14 days).
+# session_duration = "14d"
+
+## Additional dashboard footer links. Include the base path in local URLs if configured.
+# footer_links = [{ label = "Privacy", url = "https://example.com/privacy" }, '<a href="/help">Help</a>']
+
+## Custom HTML for the dashboard page head. Use only trusted HTML.
+# head_html = '<meta name="custom" content="value">'
+# head_html = ['<meta name="custom" content="value">', '<link rel="stylesheet" href="https://example.com/style.css">']
 
 ## Trusted client IP headers (used in order), defaults to X-Forwarded-For.
 ## Presets: cloudflare, fastly, fly, cloudfront, akamai.
@@ -44,13 +54,32 @@ listen = 9042  # The port to listen on (http)
 # threads=2
 # memory_limit=2G
 
-[limits]  # Resource limits for dashboard reports.
+[limits]  # Resource limits
+## Maximum time a report may run before timing out.
 # report_timeout_seconds=30
+
+## Maximum number of reports running at once.
 # report_max_concurrency=8
+
+## Maximum number of days in a requested report range.
 # report_max_range_days=3660
+
+## Maximum number of values returned per dimension report.
 # report_max_dimension_results=1000
+
+## Minimum entry sessions for bounce rate in summary and dimension reports. Set to 0 to disable.
+# report_min_bounce_rate_sessions=10
+
+## Minimum measured pageviews for average time on site in summary and dimension reports. Set to 0 to disable.
+# report_min_avg_time_on_site_samples=5
+
+## Maximum number of time buckets returned by a graph report.
 # report_max_datapoints=2000
+
+## Maximum number of filters per report request.
 # report_max_filters=20
+
+## Maximum length of each filter value, in bytes.
 # report_max_filter_value_bytes=2048
 
 # Per-client rate limits (Optional)
@@ -92,15 +121,16 @@ listen = 9042  # The port to listen on (http)
 # and case-insensitive, so subdomains do not match. Use punycode for IDN domains.
 # allowed_domains     = ["example.com", "acme.org"]
 
-# Map IdP groups onto liwan roles and project access. Only applied to accounts
-# without a local password, and rewritten on every login — so a group change at
-# the IdP takes effect at the next sign-in, and local edits to such an account
-# do not survive it.
+# Map IdP groups onto liwan roles and teams. Only applied to accounts without a
+# local password, and rewritten on every login, so a group change at the IdP
+# takes effect at the next sign-in and local edits to such an account do not
+# survive it. Teams are referenced by id; create them in the teams UI first.
 # [oidc.providers.company.groups]
-# claim    = "groups"                             # the claim to read; this is the default
-# allowed  = ["analytics"]                        # optional: must be in one of these to sign in
-# admin    = ["liwan-admins"]                     # members get role admin, everyone else user
-# projects = { marketing = ["blog", "docs"], eng = ["app"] }
+# claim        = "groups"                         # the claim to read; this is the default
+# allowed      = ["analytics"]                    # optional: must be in one of these to sign in
+# admin        = ["liwan-admins"]                 # members get role admin, everyone else user
+# default_team = "aB3dE5gH7jK9mN1p"               # optional: every member of this provider joins it
+# teams        = { marketing = ["Xy12Ab34Cd56Ef78"], eng = ["Gh90Ij12Kl34Mn56"] }  # group -> team ids
 
 # Forseti (https://github.com/franzos/forseti) adds group-driven access, a
 # manage-account link on the settings page, and an account-deletion webhook.

@@ -1,0 +1,47 @@
+.container {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.mobileRange {
+  display: none;
+}
+.stepButton {
+  display: grid;
+  place-items: center;
+  padding: 0.35rem;
+  border-radius: var(--radius);
+  opacity: 0.75;
+}
+.stepButton:hover {
+  opacity: 1;
+}
+.selectRange {
+  min-width: 11rem;
+  max-width: 16rem;
+  justify-content: space-between;
+  background: var(--field);
+  color: var(--text);
+  border-color: var(--field-border);
+  border-radius: var(--radius);
+}
+.selectRange:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.rangeDialog {
+  width: min(30rem, 100%);
+}
+
+@media (max-width: 700px) {
+  .desktopRange {
+    display: none;
+  }
+
+  .mobileRange {
+    display: block;
+    width: 11rem;
+    margin: 0;
+    border-radius: var(--radius);
+  }
+}

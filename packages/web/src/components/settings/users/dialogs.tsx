@@ -1,0 +1,81 @@
+import styles from "../dialogs.module.css";
+
+import type { SubmitEvent } from "react";
+import { useRef } from "react";
+import { PlusIcon } from "lucide-react";
+
+import { api, useMutation } from "@/api";
+import { Dialog } from "@/components/ui/dialog";
+import { createToast } from "@/components/ui/toast";
+import { invalidateUsers } from "@/hooks/api";
+import { SettingsField } from "../form";
+
+export const CreateUser = () => {
+	const closeRef = useRef<HTMLButtonElement>(null);
+
+	const { mutate } = useMutation({
+		mutationFn: api["/api/dashboard/user"].post,
+		onSuccess: () => {
+			closeRef?.current?.click();
+			createToast("User created", "success");
+			invalidateUsers();
+		},
+		onError: (error) => createToast(error.message, "error"),
+	});
+
+	const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const { username, password, admin } = Object.fromEntries(new FormData(event.currentTarget)) as {
+			username: string;
+			password: string;
+			admin: string;
+		};
+		const role = admin === "on" ? "admin" : "user";
+		mutate({ json: { username, password, role } });
+	};
+
+	return (
+		<Dialog
+			title="Create a new user"
+			description="Add users to teams to give them project access. Administrators can manage all projects."
+			trigger={
+				<button type="button" className={styles.new} aria-label="Create user" title="Create user">
+					<PlusIcon size={24} strokeWidth={2.25} />
+				</button>
+			}
+		>
+			<form onSubmit={handleSubmit}>
+				<SettingsField label="Username *" description="Cannot be changed later.">
+					<input
+						required
+						pattern="^[A-Za-z0-9_\-]{2,20}$"
+						name="username"
+						type="text"
+						placeholder="MyUsername"
+						autoComplete="username"
+					/>
+				</SettingsField>
+				<SettingsField label="Password *" description="Must be at least 8 characters.">
+					<input required name="password" type="password" autoComplete="new-password" minLength={8} />
+				</SettingsField>
+				<label className={styles.switchLabel}>
+					{/* biome-ignore lint/a11y/useAriaPropsForRole: this is an uncontrolled component */}
+					<input name="admin" type="checkbox" role="switch" />
+					<span>
+						Enable administrator access
+						<small>Administrators can edit and create projects, entities, and users.</small>
+					</span>
+				</label>
+				<div className="action-row">
+					<Dialog.Close className="button-secondary" ref={closeRef}>
+						Cancel
+					</Dialog.Close>
+					<button type="submit" className="button-primary">
+						Create user
+					</button>
+				</div>
+			</form>
+		</Dialog>
+	);
+};

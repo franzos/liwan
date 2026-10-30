@@ -1,0 +1,308 @@
+.detailPanel {
+  width: 100%;
+}
+
+.userDetailPanel {
+  padding-top: 1rem;
+}
+
+.apiKeyDetailPanel {
+  min-width: 0;
+  margin: 0;
+  padding: 1rem 0 0;
+  border: 0;
+}
+
+.displayHelp {
+  max-width: 46rem;
+  margin-bottom: 1rem;
+  color: var(--text-muted);
+}
+
+.displaySections {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.displaySections fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.displaySections legend {
+  margin-bottom: 0.5rem;
+  padding: 0;
+  color: var(--text);
+  font-size: var(--font-size-md);
+  font-weight: 500;
+}
+
+.displayGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem 1.25rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--field) 45%, transparent);
+}
+
+.dimensionGroups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
+  gap: 0.65rem;
+}
+
+.dimensionGroup {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--field) 45%, transparent);
+}
+
+.dimensionGroup h3 {
+  margin: 0 0 0.35rem;
+  color: var(--text-muted);
+  font-family: var(--font-family-text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.displayRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+  color: color-mix(in srgb, var(--text) 84%, var(--text-muted));
+}
+
+.displayRow > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segmented {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 0.02rem;
+  margin-bottom: 0;
+  padding: 0.12rem;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.segmented::before {
+  position: absolute;
+  top: 0.12rem;
+  bottom: 0.12rem;
+  left: 0.12rem;
+  width: calc((100% - 0.28rem) / 3);
+  border-radius: var(--radius-full);
+  background: var(--accent-fill);
+  content: "";
+  transition: transform 160ms ease;
+}
+
+.segmented:has(button:nth-child(2)[data-pressed])::before {
+  transform: translateX(100%);
+}
+
+.segmented:has(button:nth-child(3)[data-pressed])::before {
+  transform: translateX(200%);
+}
+
+.segmented button {
+  position: relative;
+  z-index: 1;
+  width: auto;
+  min-height: 1.7rem;
+  margin: 0;
+  padding: 0.15rem 0.42rem;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+  line-height: 1.2;
+  box-shadow: none;
+  transition: color 160ms ease;
+}
+
+.segmented button:hover {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.segmented button[data-pressed]:hover {
+  color: var(--accent-contrast);
+}
+
+.segmented button[data-pressed] {
+  color: var(--accent-contrast);
+}
+
+.dangerZone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.dangerZone strong {
+  display: block;
+  margin-bottom: 0.2rem;
+  font-size: var(--font-size-md);
+  font-weight: 500;
+}
+
+.dangerZone p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+}
+
+.entityId {
+  display: inline;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-style: normal;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.16em;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.entityId:hover {
+  background: transparent;
+  color: var(--accent-hover);
+  box-shadow: none;
+}
+
+.apiKeyDialog {
+  width: min(34rem, 100%);
+}
+
+.apiKeyExpired {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.apiKeyAccessSection {
+  margin: 0 0 1rem;
+}
+
+.apiKeyAccessGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.apiKeyAccessRow {
+  min-width: 0;
+}
+
+.apiKeyAccessRow > :last-child {
+  margin-bottom: 0;
+}
+
+.apiKeyExpirationSelect {
+  position: relative;
+  margin-top: 0.35rem;
+}
+
+.apiKeyExpirationSelect select {
+  margin: 0;
+  padding-right: 3.8rem;
+}
+
+/* sits just left of the select chevron */
+.apiKeyExpirationSelect > svg {
+  position: absolute;
+  top: 50%;
+  right: 2.1rem;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+@media (max-width: 520px) {
+  .apiKeyAccessGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.apiKeyPermissionOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.5rem;
+}
+
+.apiKeyDialog fieldset {
+  margin-bottom: 1rem;
+}
+
+.apiKeyAccessSection > fieldset {
+  margin-bottom: 0;
+}
+
+.apiKeyPermissionOption {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: auto;
+  margin: 0;
+  font-size: var(--font-size-md);
+  line-height: 1.25;
+}
+
+.apiKeyPermissionOptions .apiKeyPermissionOption > input {
+  width: auto;
+  margin: 0.15rem 0 0;
+}
+
+.apiKeyPermissionOption span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.apiKeyPermissionOption small {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 520px) {
+  .displayRow {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .segmented {
+    justify-self: stretch;
+  }
+
+  .segmented button {
+    flex: 1;
+  }
+}

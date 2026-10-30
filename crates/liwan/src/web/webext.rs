@@ -1,0 +1,470 @@
+use std::convert::Infallible;
+use std::fmt::Display;
+use std::net::{IpAddr, SocketAddr};
+
+use crate::config::{Config, FooterLink};
+use crate::utils::geoip_headers::parse_geoip_headers;
+use crate::utils::ip_headers::{ClientIpHeaderSource, TrustedProxy, parse_client_ip, should_trust_proxy_headers};
+use crate::web::Files;
+use crate::web::RouterState;
+use aide::axum::IntoApiResponse;
+use aide::{OperationInput, OperationOutput};
+use axum::body::Body;
+use axum::extract::{ConnectInfo, FromRequestParts, Request};
+use axum::response::IntoResponse;
+use axum::{Json, extract};
+use http::{Response, StatusCode, header};
+use schemars::JsonSchema;
+use serde::Serialize;
+use serde_json::json;
+use tower_governor::{GovernorError, key_extractor::KeyExtractor};
+
+pub type ApiResult<T, E = ApiError> = Result<T, E>;
+
+#[rustfmt::skip]
+pub trait AxumErrExt<T> {
+    fn http_err(self, message: &str, status: StatusCode) -> ApiResult<T>;
+    fn http_status(self, status: StatusCode) -> ApiResult<T>;
+}
+
+impl<T> AxumErrExt<T> for Option<T> {
+    fn http_err(self, message: &str, status: StatusCode) -> ApiResult<T> {
+        self.ok_or_else(|| ApiError { message: message.to_string(), status, retry_after: None })
+    }
+
+    fn http_status(self, status: StatusCode) -> ApiResult<T> {
+        self.ok_or_else(|| status.into())
+    }
+}
+
+impl<T, E: Display> AxumErrExt<T> for Result<T, E> {
+    fn http_err(self, message: &str, status: StatusCode) -> ApiResult<T> {
+        match self {
+            Ok(ok) => Ok(ok),
+            Err(e) => {
+                if status == StatusCode::INTERNAL_SERVER_ERROR {
+                    tracing::error!("{message}: {err}", err = e);
+                } else {
+                    tracing::debug!("{message}: {err}", err = e);
+                }
+                Err(ApiError { message: message.to_string(), status, retry_after: None })
+            }
+        }
+    }
+
+    fn http_status(self, status: StatusCode) -> ApiResult<T> {
+        match self {
+            Ok(ok) => Ok(ok),
+            Err(e) => {
+                if status == StatusCode::INTERNAL_SERVER_ERROR {
+                    tracing::error!("{err}", err = e);
+                } else {
+                    tracing::debug!("{err}", err = e);
+                }
+                Err(status.into())
+            }
+        }
+    }
+}
+
+pub struct ApiError {
+    pub message: String,
+    pub status: StatusCode,
+    pub retry_after: Option<u64>,
+}
+
+impl OperationOutput for ApiError {
+    type Inner = Self;
+}
+
+impl From<StatusCode> for ApiError {
+    fn from(status: StatusCode) -> Self {
+        ApiError {
+            message: status.canonical_reason().unwrap_or("Unknown error").to_string(),
+            status,
+            retry_after: None,
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> http::Response<Body> {
+        let body = Json(
+            json!({ "status": self.status.canonical_reason(), "message": self.message, "code": self.status.as_u16() }),
+        );
+        let mut response = (self.status, body).into_response();
+        if let Some(seconds) = self.retry_after
+            && let Ok(value) = http::HeaderValue::from_str(&seconds.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        response
+    }
+}
+
+const CONFIG_PLACEHOLDER: &str = "__LIWAN_CONFIG__";
+const HEAD_HTML_PLACEHOLDER: &str = "<!-- LIWAN_HEAD_HTML -->";
+const FOOTER_LINKS_PLACEHOLDER: &str = "<!-- LIWAN_FOOTER_LINKS -->";
+
+fn cache_control(path: &str, is_html: bool) -> &'static str {
+    if path.starts_with("_assets/") {
+        "public, max-age=31536000, immutable"
+    } else if is_html {
+        "private, no-cache"
+    } else {
+        "public, no-cache"
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HtmlConfig {
+    base_url: String,
+    disable_favicons: bool,
+}
+
+/// Dynamic routes are exported with a placeholder segment, e.g. `p/{id}` is served from `p/project`.
+const ROUTE_PLACEHOLDERS: [(&str, &str); 6] = [
+    ("p/", "project"),
+    ("settings/projects/", "project"),
+    ("settings/entities/", "entity"),
+    ("settings/api-keys/", "key"),
+    ("settings/users/", "user"),
+    ("settings/teams/", "team"),
+];
+
+pub(super) async fn serve(
+    extract::State(state): extract::State<RouterState>,
+    orig_uri: extract::OriginalUri,
+    req: Request,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut path = req
+        .uri()
+        .path()
+        .strip_prefix(state.config.base_path())
+        .unwrap_or(req.uri().path())
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+        .to_string();
+    if path.is_empty() {
+        path = "index.html".to_string();
+    }
+
+    if req.method() != http::Method::GET {
+        return Err(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    for (prefix, placeholder) in ROUTE_PLACEHOLDERS {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            path = match rest.split_once('/') {
+                Some((_, rest)) => format!("{prefix}{placeholder}/{rest}"),
+                None => format!("{prefix}{placeholder}"),
+            };
+        }
+    }
+
+    let file = if let Some(content) = Files::get(&path) {
+        Some(content)
+    } else {
+        path = format!("{path}/index.html");
+        Files::get(&path)
+    };
+
+    let orig_path = orig_uri.path();
+    if orig_path.ends_with('/') && file.is_some() && orig_path != format!("{}/", state.config.base_path()) {
+        let redirect = orig_uri.path().trim_start_matches('/').trim_end_matches('/');
+        return Ok(Response::builder()
+            .status(StatusCode::MOVED_PERMANENTLY)
+            .header(header::LOCATION, format!("/{redirect}"))
+            .body(Body::empty())
+            .unwrap());
+    }
+
+    let Some(content) = file else { return Err(StatusCode::NOT_FOUND) };
+
+    let mime = content.metadata.mimetype();
+    let is_html = mime == "text/html";
+
+    let (body, hash) = if is_html {
+        let html = std::str::from_utf8(&content.data).map_err(|err| {
+            tracing::error!("failed to read embedded HTML as UTF-8: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        let config =
+            HtmlConfig { base_url: state.config.base_url.clone(), disable_favicons: state.config.disable_favicons };
+        let config_json = serde_json::to_string(&config).map_err(|err| {
+            tracing::error!("failed to serialize HTML config: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        let base_path = state.config.base_path();
+        let body = html.replace(CONFIG_PLACEHOLDER, &config_json.replace('<', "\\u003c"));
+        let body = if base_path.is_empty() {
+            body
+        } else {
+            body.replace("href=\"/", &format!("href=\"{base_path}/"))
+                .replace("src=\"/", &format!("src=\"{base_path}/"))
+                .replace("=\"/_assets/", &format!("=\"{base_path}/_assets/"))
+                .replace("url=/", &format!("url={base_path}/"))
+                .replace("url(\"/_assets/", &format!("url(\"{base_path}/_assets/"))
+        };
+        let body = inject_custom_html(body, &state.config);
+        let hash = blake3::hash(body.as_bytes()).to_hex().to_string();
+        (Body::from(body), hash)
+    } else {
+        let hash = crate::utils::encode_hex(&content.metadata.sha256_hash());
+        (Body::from(content.data), hash)
+    };
+
+    let etag = format!("\"{hash}\"");
+    let builder = Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::ETAG, etag.as_str())
+        .header(header::CACHE_CONTROL, cache_control(&path, is_html));
+
+    if req.headers().get(header::IF_NONE_MATCH).is_some_and(|value| value == etag.as_str()) {
+        return Ok(builder.status(StatusCode::NOT_MODIFIED).body(Body::empty()).unwrap());
+    }
+
+    Ok(builder.body(body).unwrap())
+}
+
+fn inject_custom_html(html: String, config: &Config) -> String {
+    let links = config
+        .footer_links
+        .iter()
+        .map(|link| match link {
+            FooterLink::Html(html) => html.clone(),
+            FooterLink::Link { label, url } => format!("<a href=\"{url}\">{label}</a>"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    html.replace(FOOTER_LINKS_PLACEHOLDER, &links).replace(HEAD_HTML_PLACEHOLDER, &config.head_html.join("\n"))
+}
+
+pub(crate) fn empty_response() -> impl IntoApiResponse {
+    #[derive(Serialize, JsonSchema)]
+    struct StatusResponse {
+        status: String,
+    }
+
+    (StatusCode::OK, Json(StatusResponse { status: "OK".into() }))
+}
+
+macro_rules! http_bail {
+    ($status:expr, $($arg:tt)*) => {
+        return Err(crate::web::webext::ApiError {
+            message: format!($($arg)*),
+            status: $status,
+            retry_after: None,
+        })
+    };
+}
+pub(crate) use http_bail;
+
+#[derive(Debug, Copy, Clone)]
+pub struct ClientIp(pub Option<IpAddr>);
+impl OperationInput for ClientIp {}
+
+impl FromRequestParts<RouterState> for ClientIp {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut http::request::Parts,
+        state: &RouterState,
+    ) -> Result<Self, Self::Rejection> {
+        let peer_ip =
+            ConnectInfo::<SocketAddr>::from_request_parts(parts, state).await.ok().map(|ConnectInfo(addr)| addr.ip());
+        let is_public = |ip: &IpAddr| {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && match ip {
+                    IpAddr::V4(ip) => !ip.is_private() && !ip.is_link_local() && !ip.is_broadcast(),
+                    IpAddr::V6(ip) => !ip.is_unique_local() && !ip.is_unicast_link_local(),
+                }
+        };
+
+        if should_trust_proxy_headers(peer_ip, &state.config.trusted_proxies) {
+            for header in state.config.trusted_headers.iter() {
+                if let Some(ip) =
+                    parse_client_ip(&parts.headers, header, peer_ip, &state.config.trusted_proxies).filter(is_public)
+                {
+                    return Ok(ClientIp(Some(ip)));
+                }
+            }
+        }
+
+        Ok(ClientIp(peer_ip.filter(is_public)))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientIpKeyExtractor {
+    headers: Vec<ClientIpHeaderSource>,
+    trusted_proxies: Vec<TrustedProxy>,
+}
+
+impl ClientIpKeyExtractor {
+    pub fn new(config: &Config) -> Self {
+        Self {
+            headers: config.trusted_headers.as_ref().to_vec(),
+            trusted_proxies: config.trusted_proxies.as_ref().to_vec(),
+        }
+    }
+}
+
+impl KeyExtractor for ClientIpKeyExtractor {
+    type Key = IpAddr;
+
+    fn extract<T>(&self, request: &http::Request<T>) -> Result<Self::Key, GovernorError> {
+        let peer_ip = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(addr)| addr.ip());
+
+        if should_trust_proxy_headers(peer_ip, &self.trusted_proxies) {
+            for header in &self.headers {
+                if let Some(ip) = parse_client_ip(request.headers(), header, peer_ip, &self.trusted_proxies) {
+                    return Ok(ip);
+                }
+            }
+        }
+
+        peer_ip.ok_or(GovernorError::UnableToExtractKey)
+    }
+}
+
+/// A valid server-ingestion API key.
+pub struct AuthenticatedApiKey {
+    pub access: crate::app::ApiKeyAccess,
+}
+
+impl OperationInput for AuthenticatedApiKey {}
+
+impl FromRequestParts<RouterState> for AuthenticatedApiKey {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut http::request::Parts,
+        state: &RouterState,
+    ) -> Result<Self, Self::Rejection> {
+        let credential = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(invalid_api_key)?
+            .to_string();
+        let app = state.app.clone();
+        match tokio::task::spawn_blocking(move || app.api_keys.authenticate(&credential)).await {
+            Ok(Ok(Some(access))) => Ok(Self { access }),
+            Ok(Ok(None)) => Err(invalid_api_key()),
+            Ok(Err(error)) => {
+                tracing::error!(?error, "Failed to authenticate API key");
+                Err(ApiError {
+                    message: "Failed to authenticate API key".to_string(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    retry_after: None,
+                })
+            }
+            Err(error) => {
+                tracing::error!(?error, "API key authentication task failed");
+                Err(StatusCode::INTERNAL_SERVER_ERROR.into())
+            }
+        }
+    }
+}
+
+fn invalid_api_key() -> ApiError {
+    ApiError { message: "Invalid API key".to_string(), status: StatusCode::UNAUTHORIZED, retry_after: None }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GeoLocationHeaders {
+    pub country: Option<String>,
+    pub city: Option<String>,
+}
+impl OperationInput for GeoLocationHeaders {}
+
+impl FromRequestParts<RouterState> for GeoLocationHeaders {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut http::request::Parts,
+        state: &RouterState,
+    ) -> Result<Self, Self::Rejection> {
+        let peer_ip =
+            ConnectInfo::<SocketAddr>::from_request_parts(parts, state).await.ok().map(|ConnectInfo(addr)| addr.ip());
+        if !should_trust_proxy_headers(peer_ip, &state.config.trusted_proxies) {
+            return Ok(Self::default());
+        }
+
+        let values = parse_geoip_headers(&parts.headers, &state.config.geoip.headers);
+        Ok(Self { country: values.country, city: values.city })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::ip_headers::TrustedProxy;
+
+    #[test]
+    fn caches_generated_assets_and_revalidates_mutable_files() {
+        assert_eq!(cache_control("_assets/app.abc12345.js", false), "public, max-age=31536000, immutable");
+        assert_eq!(cache_control("index.html", true), "private, no-cache");
+        assert_eq!(cache_control("favicon.svg", false), "public, no-cache");
+    }
+
+    #[test]
+    fn custom_html_is_inserted_without_leaking_markers() {
+        let mut config = Config::default();
+        config.head_html =
+            vec!["<meta name=\"custom\" content=\"enabled\">".into(), "<meta name=\"second\">".into()].into();
+        config.footer_links = vec![
+            FooterLink::Link { label: "Terms".into(), url: "https://example.com/terms".into() },
+            FooterLink::Html("<a href=\"/help\">Help</a>".into()),
+        ];
+        let html = format!(
+            "<head>{HEAD_HTML_PLACEHOLDER}</head><footer>{FOOTER_LINKS_PLACEHOLDER}<a href=\"/attributions\">Licenses</a></footer>"
+        );
+        let rendered = inject_custom_html(html, &config);
+
+        assert!(rendered.contains("<meta name=\"custom\" content=\"enabled\">"));
+        assert!(rendered.contains("<meta name=\"second\">"));
+        assert!(rendered.contains("<a href=\"https://example.com/terms\">Terms</a>"));
+        assert!(rendered.contains("<a href=\"/help\">Help</a>"));
+        assert!(rendered.contains("<a href=\"/attributions\">Licenses</a>"));
+        assert!(!rendered.contains(HEAD_HTML_PLACEHOLDER));
+        assert!(!rendered.contains(FOOTER_LINKS_PLACEHOLDER));
+
+        let empty =
+            inject_custom_html(format!("{HEAD_HTML_PLACEHOLDER}{FOOTER_LINKS_PLACEHOLDER}"), &Config::default());
+        assert!(empty.is_empty());
+    }
+
+    fn request(peer_ip: &str) -> http::Request<()> {
+        let mut request = http::Request::builder().header("x-forwarded-for", "203.0.113.10").body(()).unwrap();
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(peer_ip.parse().unwrap(), 1234)));
+        request
+    }
+
+    #[test]
+    fn rate_limit_key_uses_headers_only_for_trusted_proxies() {
+        let mut config = Config::default();
+        config.trusted_headers = vec![ClientIpHeaderSource::Header("x-forwarded-for".into())].into();
+        config.trusted_proxies = vec![TrustedProxy::Ip("10.0.0.1".parse().unwrap())].into();
+        let extractor = ClientIpKeyExtractor::new(&config);
+
+        assert_eq!(extractor.extract(&request("10.0.0.1")).unwrap(), "203.0.113.10".parse::<IpAddr>().unwrap());
+        assert_eq!(extractor.extract(&request("10.0.0.2")).unwrap(), "10.0.0.2".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn rate_limit_key_ignores_headers_without_trusted_proxies() {
+        let mut config = Config::default();
+        config.trusted_headers = vec![ClientIpHeaderSource::Header("x-forwarded-for".into())].into();
+        let extractor = ClientIpKeyExtractor::new(&config);
+
+        assert_eq!(extractor.extract(&request("10.0.0.1")).unwrap(), "10.0.0.1".parse::<IpAddr>().unwrap());
+    }
+}

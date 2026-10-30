@@ -1,0 +1,77 @@
+.metrics {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 0.7rem;
+  transition: opacity 0.2s ease;
+
+  &.awaiting {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  &[data-loading="true"] button.metric h3 {
+    opacity: 0.6;
+  }
+
+  &.empty button.metric h3 {
+    visibility: hidden;
+  }
+
+  @media (max-width: 820px) {
+    flex-wrap: wrap;
+
+    button.metric {
+      width: calc(50% - 0.35rem);
+    }
+  }
+}
+
+button.metric {
+  min-width: 7rem;
+  font-size: var(--font-size-sm);
+
+  h3 {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    display: inline-flex;
+    gap: 0.5rem;
+    align-items: center;
+    color: var(--text-muted);
+  }
+
+  h2 {
+    color: var(--text-muted);
+    margin: 0;
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    margin-bottom: 0.3rem;
+  }
+
+  span.change {
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+  }
+
+  &[data-active="true"] {
+    h2 {
+      color: var(--text);
+    }
+    h3 {
+      color: var(--text-strong);
+    }
+  }
+}
+
+@media (max-width: 820px) {
+  button.metric h3 {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .metrics {
+    transition: none;
+  }
+}
